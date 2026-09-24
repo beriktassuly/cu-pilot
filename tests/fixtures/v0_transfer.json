@@ -1,0 +1,66 @@
+{
+  "_fixture": "Handcrafted synthetic RPC shape; not a recorded or signed transaction.",
+  "slot": 1001,
+  "blockTime": null,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "computeUnitsConsumed": 450,
+    "costUnits": 900,
+    "innerInstructions": [],
+    "logMessages": [],
+    "loadedAddresses": {
+      "writable": [
+        "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+      ],
+      "readonly": [
+        "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq"
+      ]
+    }
+  },
+  "version": 0,
+  "transaction": {
+    "signatures": [
+      "EyFYDWDhksPYpRk3DLzeW4izQagJZte6bKCQFagLYBdtJyaEyjbQpAWCbqDhHVymzjPJ4vdeHG1HHQp1qi6FhZD"
+    ],
+    "message": {
+      "accountKeys": [
+        "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111"
+      ],
+      "header": {
+        "numRequiredSignatures": 1,
+        "numReadonlySignedAccounts": 0,
+        "numReadonlyUnsignedAccounts": 2
+      },
+      "recentBlockhash": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+      "instructions": [
+        {
+          "programIdIndex": 2,
+          "accounts": [],
+          "data": "FKuNA3"
+        },
+        {
+          "programIdIndex": 1,
+          "accounts": [
+            0,
+            3
+          ],
+          "data": "3Bxs4ffTu9T19DNF"
+        }
+      ],
+      "addressTableLookups": [
+        {
+          "accountKey": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8",
+          "writableIndexes": [
+            7
+          ],
+          "readonlyIndexes": [
+            9
+          ]
+        }
+      ]
+    }
+  }
+}

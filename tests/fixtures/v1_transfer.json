@@ -1,0 +1,48 @@
+{
+  "_fixture": "Handcrafted synthetic RPC shape; not a recorded or signed transaction.",
+  "slot": 1002,
+  "blockTime": null,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "computeUnitsConsumed": 150,
+    "costUnits": 900,
+    "innerInstructions": [],
+    "logMessages": []
+  },
+  "version": 1,
+  "transaction": {
+    "signatures": [
+      "G8mkV3evpXRRoYdxZhzcnzCf2Nz5XoH2E1P22J9nLHMdFe81eJ9H8bToQEa5yYPqkD5pVRGXinFoe7TmQmWrkwE"
+    ],
+    "message": {
+      "accountKeys": [
+        "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR",
+        "11111111111111111111111111111111"
+      ],
+      "header": {
+        "numRequiredSignatures": 1,
+        "numReadonlySignedAccounts": 0,
+        "numReadonlyUnsignedAccounts": 1
+      },
+      "recentBlockhash": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+      "instructions": [
+        {
+          "programIdIndex": 2,
+          "accounts": [
+            0,
+            1
+          ],
+          "data": "3Bxs4ffTu9T19DNF"
+        }
+      ],
+      "transactionConfig": {
+        "computeUnitLimit": 30000,
+        "heapSize": null,
+        "loadedAccountsDataSizeLimit": 200000,
+        "priorityFee": 500
+      }
+    }
+  }
+}
