@@ -44,6 +44,7 @@ test("new deployment cannot adopt calibration from before its deployment", () =>
       max_deployment_age_slots: 100,
       max_deployment_age_seconds: 60,
       control_probability: 0,
+      max_control_failure_streak: 3,
     },
     deployments: [
       {

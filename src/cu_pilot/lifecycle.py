@@ -927,7 +927,7 @@ class ProfileRegistry:
         current_slot: int,
         elapsed_ms: float,
     ) -> None:
-        """Retain failures; only complete successful controls test resource excess."""
+        """Retain failures; any known successful resource excess suspends the release."""
         _slot(current_slot)
         if type(success) is not bool or not math.isfinite(elapsed_ms) or elapsed_ms < 0:
             raise ValueError("Invalid control outcome")

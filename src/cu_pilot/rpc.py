@@ -310,7 +310,13 @@ class RpcClient:
         units = _integer(value.get("unitsConsumed"), "unitsConsumed")
         data = value.get("loadedAccountsDataSize")
         if data is not None:
-            data = _integer(data, "loadedAccountsDataSize")
+            if evidence["loaded_accounts_bytes"] is None:
+                raise RpcError(
+                    "Simulation requires valid loadedAccountsDataSize",
+                    code="missing_measurement",
+                    evidence=evidence,
+                )
+            data = evidence["loaded_accounts_bytes"]
         if (version == 1 or require_loaded_data) and data is None:
             raise RpcError(
                 "Resource simulation requires loadedAccountsDataSize",
@@ -349,7 +355,7 @@ def _integer(value: Any, field: str) -> int:
 
 
 def _optional_integer(value: Any) -> int | None:
-    return value if type(value) is int and value >= 0 else None
+    return value if type(value) is int and 0 <= value < 2**64 else None
 
 
 def _commitment(value: str) -> None:

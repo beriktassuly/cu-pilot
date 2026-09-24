@@ -54,7 +54,6 @@ type Quarantine = {
 };
 type JournalRecord = {
   schema_version: string;
-  max_failure_streak?: number;
   kind: "decision" | "outcome" | "recovery";
   payload: ResourceDecision | ControlObservation | RecoveryAudit;
 };
@@ -73,13 +72,19 @@ export class FileControlStore implements ControlStore {
   private readonly quarantines = new Map<string, Quarantine>();
   private readonly recovered = new Map<string, string>();
   private readonly failureStreak = new Map<string, number>();
+  private readonly failurePolicies = new Map<string, number>();
   private consumedBytes = 0;
   private prefixDigest = createHash("sha256").digest("hex");
   constructor(
     private readonly path: string,
-    private readonly maxFailureStreak = 3,
+    private readonly expectedMaxFailureStreak?: number,
   ) {
-    if (!Number.isSafeInteger(maxFailureStreak) || maxFailureStreak < 1)
+    if (
+      expectedMaxFailureStreak !== undefined &&
+      (!Number.isSafeInteger(expectedMaxFailureStreak) ||
+        expectedMaxFailureStreak < 1 ||
+        expectedMaxFailureStreak > 2 ** 32 - 1)
+    )
       throw new Error("invalid_control_failure_policy");
     mkdirSync(dirname(path), { recursive: true });
     this.refresh();
@@ -133,6 +138,12 @@ export class FileControlStore implements ControlStore {
       (decision.controlSelected && decision.controlProbability === 0)
     )
       throw new Error("invalid_control_decision");
+    this.validateFailurePolicy(
+      decision.profileId!,
+      decision.profileRevision!,
+      decision.artifactDigest!,
+      decision.maxControlFailureStreak,
+    );
     exactSlot(decision.context.currentSlot);
     const cu = decision.prediction.compute_unit_limit,
       data = decision.prediction.loaded_accounts_data_size_limit;
@@ -145,6 +156,25 @@ export class FileControlStore implements ControlStore {
       data! > MAX_DATA
     )
       throw new Error("invalid_control_decision");
+  }
+  private validateFailurePolicy(
+    profile: string,
+    revision: number,
+    digest: string,
+    threshold: number | null,
+  ) {
+    const previous = this.failurePolicies.get(
+      releaseKey(profile, revision, digest),
+    );
+    if (
+      !Number.isSafeInteger(threshold) ||
+      threshold! < 1 ||
+      threshold! > 2 ** 32 - 1 ||
+      (this.expectedMaxFailureStreak !== undefined &&
+        threshold !== this.expectedMaxFailureStreak) ||
+      (previous !== undefined && threshold !== previous)
+    )
+      throw new Error("incompatible_control_failure_policy");
   }
   private validateOutcome(outcome: ControlObservation): ResourceDecision {
     const frozen = this.decisions.get(outcome.observationId);
@@ -164,7 +194,7 @@ export class FileControlStore implements ControlStore {
     const sim = outcome.simulation;
     if (
       !sim ||
-      !["success", "failed"].includes(sim.status) ||
+      !["success", "incomplete", "failed"].includes(sim.status) ||
       !Number.isFinite(sim.elapsedMs) ||
       sim.elapsedMs < 0 ||
       !Number.isSafeInteger(sim.attempts) ||
@@ -176,22 +206,29 @@ export class FileControlStore implements ControlStore {
       exactSlot(sim.slot) < exactSlot(decision.context.currentSlot)
     )
       throw new Error("control_outcome_predates_decision");
+    const validMeasurement = (value: number | null, limit: number) =>
+      value === null ||
+      (Number.isSafeInteger(value) && value >= 0 && value <= limit);
     if (
-      sim.status === "success" &&
-      (sim.slot === null ||
-        !Number.isSafeInteger(sim.computeUnits) ||
-        sim.computeUnits! < 0 ||
-        sim.computeUnits! > MAX_CU ||
-        !Number.isSafeInteger(sim.loadedAccountsBytes) ||
-        sim.loadedAccountsBytes! < 0 ||
-        sim.loadedAccountsBytes! > MAX_DATA)
+      !validMeasurement(sim.computeUnits, MAX_CU) ||
+      !validMeasurement(sim.loadedAccountsBytes, MAX_DATA) ||
+      (sim.status !== "failed" && sim.slot === null) ||
+      (sim.status === "success" &&
+        (sim.computeUnits === null || sim.loadedAccountsBytes === null)) ||
+      (sim.status === "incomplete" &&
+        sim.computeUnits !== null &&
+        sim.loadedAccountsBytes !== null) ||
+      (sim.status === "failed" &&
+        (sim.computeUnits !== null || sim.loadedAccountsBytes !== null))
     )
       throw new Error("invalid_control_outcome");
     const excess =
-      sim.status === "success" &&
-      (sim.computeUnits! > decision.prediction!.compute_unit_limit! ||
-        sim.loadedAccountsBytes! >
-          decision.prediction!.loaded_accounts_data_size_limit!);
+      sim.status !== "failed" &&
+      ((sim.computeUnits !== null &&
+        sim.computeUnits > decision.prediction!.compute_unit_limit!) ||
+        (sim.loadedAccountsBytes !== null &&
+          sim.loadedAccountsBytes >
+            decision.prediction!.loaded_accounts_data_size_limit!));
     if (outcome.resourceExcess !== excess)
       throw new Error("incorrect_control_excess");
     return decision;
@@ -224,6 +261,12 @@ export class FileControlStore implements ControlStore {
     );
     if (risk || context.budgetIndependent !== true)
       throw new Error("recovery_" + (risk ?? "unsupported_workload"));
+    this.validateFailurePolicy(
+      m.profile_id,
+      m.revision,
+      m.artifact_sha256,
+      m.max_control_failure_streak,
+    );
     if (
       !Number.isSafeInteger(m.revision) ||
       m.revision < 1 ||
@@ -258,10 +301,8 @@ export class FileControlStore implements ControlStore {
     return releaseKey(m.profile_id, m.revision, m.artifact_sha256);
   }
   private ingest(record: JournalRecord, apply = true) {
-    if (record?.schema_version !== "cu-pilot-controls-v1")
+    if (record?.schema_version !== "cu-pilot-controls-v2")
       throw new Error("incompatible_control_journal");
-    if (record.max_failure_streak !== this.maxFailureStreak)
-      throw new Error("incompatible_control_failure_policy");
     const payload = record.payload;
     const id =
       record.kind === "recovery"
@@ -287,6 +328,20 @@ export class FileControlStore implements ControlStore {
     if (record.kind === "recovery") {
       const recovery = payload as RecoveryAudit;
       this.recovered.set(recovery.release.manifest.profile_id, recoveryKey!);
+      this.failurePolicies.set(
+        recoveryKey!,
+        recovery.release.manifest.max_control_failure_streak,
+      );
+    } else if (record.kind === "decision") {
+      const frozen = payload as ResourceDecision;
+      this.failurePolicies.set(
+        releaseKey(
+          frozen.profileId!,
+          frozen.profileRevision!,
+          frozen.artifactDigest!,
+        ),
+        frozen.maxControlFailureStreak!,
+      );
     } else if (decision) {
       const outcome = payload as ControlObservation;
       const key = releaseKey(
@@ -295,11 +350,14 @@ export class FileControlStore implements ControlStore {
         decision.artifactDigest!,
       );
       const streak =
-        outcome.simulation.status === "failed"
+        outcome.simulation.status !== "success"
           ? (this.failureStreak.get(key) ?? 0) + 1
           : 0;
       this.failureStreak.set(key, streak);
-      if (outcome.resourceExcess || streak >= this.maxFailureStreak) {
+      if (
+        outcome.resourceExcess ||
+        streak >= decision.maxControlFailureStreak!
+      ) {
         const rejectedSlot =
           outcome.simulation.slot ??
           exactSlot(decision.context.currentSlot).toString();
@@ -319,7 +377,6 @@ export class FileControlStore implements ControlStore {
   }
   private append(record: JournalRecord) {
     this.refresh();
-    record = { ...record, max_failure_streak: this.maxFailureStreak };
     const id =
       record.kind === "recovery"
         ? (record.payload as RecoveryAudit).recoveryId
@@ -367,14 +424,14 @@ export class FileControlStore implements ControlStore {
   }
   recordDecision(decision: ResourceDecision) {
     this.append({
-      schema_version: "cu-pilot-controls-v1",
+      schema_version: "cu-pilot-controls-v2",
       kind: "decision",
       payload: { ...decision, unsignedMessage: null },
     });
   }
   recordOutcome(observation: ControlObservation) {
     this.append({
-      schema_version: "cu-pilot-controls-v1",
+      schema_version: "cu-pilot-controls-v2",
       kind: "outcome",
       payload: observation,
     });
@@ -392,7 +449,7 @@ export class FileControlStore implements ControlStore {
     const { artifact: _artifact, now, ...evidence } = request;
     const recoveryId = randomUUID();
     this.append({
-      schema_version: "cu-pilot-controls-v1",
+      schema_version: "cu-pilot-controls-v2",
       kind: "recovery",
       payload: {
         ...evidence,

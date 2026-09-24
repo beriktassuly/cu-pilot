@@ -98,6 +98,30 @@ def test_v1_detected_without_flag_and_mismatched_flag_rejected() -> None:
             rpc.simulate(wire_bytes(1), version="legacy")
 
 
+@pytest.mark.parametrize("invalid", ["bad", True, -1, 1.5, 2**64])
+@pytest.mark.parametrize("field", ["unitsConsumed", "loadedAccountsDataSize"])
+def test_invalid_companion_preserves_known_partial_simulation_evidence(field, invalid) -> None:
+    value = {"err": None, "unitsConsumed": 900, "loadedAccountsDataSize": 2000}
+    value[field] = invalid
+    transport = httpx.MockTransport(
+        lambda _: httpx.Response(
+            200, json={"id": 1, "result": {"context": {"slot": 10}, "value": value}}
+        )
+    )
+    with RpcClient("https://example.invalid", transport=transport) as rpc:
+        with pytest.raises(RpcError) as failure:
+            rpc.simulate(wire_bytes("legacy"), min_context_slot=10, require_loaded_data=True)
+        assert failure.value.code == "missing_measurement"
+        evidence = failure.value.evidence
+        assert evidence is not None and evidence["success"] is True
+        assert evidence["error"] is None and evidence["slot"] == 10
+        assert evidence["compute_units"] == (None if field == "unitsConsumed" else 900)
+        assert evidence["loaded_accounts_bytes"] == (
+            None if field == "loadedAccountsDataSize" else 2000
+        )
+        assert rpc.call_count == 1  # Invalid measurements are not retryable transport failures.
+
+
 def test_retry_is_bounded() -> None:
     calls = []
 

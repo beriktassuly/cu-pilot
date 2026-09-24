@@ -25,6 +25,7 @@ from cu_pilot.schemas import (
     MAX_LOADED_ACCOUNT_BYTES,
     Features,
     Prediction,
+    ResourceLabel,
     StrictModel,
 )
 
@@ -95,6 +96,47 @@ class ResourceDecision(StrictModel):
     control_probability: float = 0
     # This library has no preflight, payment, slippage or wallet-validation policy.
     required_validation_unchanged: Literal[True] = True
+
+
+class _ControlEvidence(ResourceLabel):
+    slot: StrictInt = Field(ge=0, lt=2**64)
+    elapsed_ms: float = Field(ge=0, allow_inf_nan=False)
+
+
+def record_control_outcome(decision: ResourceDecision, registry: ProfileRegistry) -> None:
+    """Audit known measurements even when missing resources leave sizing unresolved.
+
+    Both live estimation and durable shadow replay use the same evidence mapping.
+    Failed transaction usage is retained for auditing, never successful demand.
+    """
+    plan = decision.plan
+    if plan is None or not plan.control_selected:
+        return
+    sim = decision.simulation
+    if sim is not None:
+        evidence = _ControlEvidence(
+            success=True,
+            compute_units=sim.units_consumed,
+            loaded_accounts_bytes=sim.loaded_accounts_bytes,
+            slot=sim.slot,
+            elapsed_ms=sim.elapsed_ms,
+        )
+    elif decision.simulation_failure is not None:
+        evidence = _ControlEvidence.model_validate(decision.simulation_failure)
+    else:
+        evidence = _ControlEvidence(
+            success=False,
+            slot=plan.context.current_slot,
+            elapsed_ms=decision.full_preparation_ms,
+        )
+    registry.record_control(
+        plan.observation_id,
+        success=evidence.success and evidence.error is None,
+        compute_units=evidence.compute_units,
+        loaded_accounts_bytes=evidence.loaded_accounts_bytes,
+        current_slot=evidence.slot,
+        elapsed_ms=evidence.elapsed_ms,
+    )
 
 
 def artifact_digest(estimator: ResourceEstimator) -> str:
@@ -447,6 +489,7 @@ def estimate_resources(
 ) -> ResourceDecision:
     started = time.perf_counter()
     rpc_attempts_before = rpc.call_count
+    retries_before = rpc.retry_count
     request_id = observation_id or str(uuid.uuid4())
     try:
         plan = prepare_decision(
@@ -464,7 +507,10 @@ def estimate_resources(
             observation_id=request_id,
             status="unresolved",
             reason="invalid_message_or_preexecution_evidence",
+            shadow=shadow,
             full_preparation_ms=(time.perf_counter() - started) * 1000,
+            rpc_attempts=rpc.call_count - rpc_attempts_before,
+            retries=rpc.retry_count - retries_before,
         )
     if before_simulation is not None:
         before_simulation(plan)  # Persist prediction BEFORE observing a label, or abort.
@@ -476,19 +522,12 @@ def estimate_resources(
         registry=registry,
         current_slot=plan.context.current_slot,
     )
-    if registry is not None and plan.control_selected:
-        sim = decision.simulation
-        registry.record_control(
-            plan.observation_id,
-            success=sim is not None,
-            compute_units=sim.units_consumed if sim else None,
-            loaded_accounts_bytes=sim.loaded_accounts_bytes if sim else None,
-            current_slot=sim.slot if sim else plan.context.current_slot,
-            elapsed_ms=sim.elapsed_ms if sim else decision.full_preparation_ms,
-        )
+    if registry is not None:
+        record_control_outcome(decision, registry)
     return decision.model_copy(
         update={
             "full_preparation_ms": (time.perf_counter() - started) * 1000,
             "rpc_attempts": rpc.call_count - rpc_attempts_before,
+            "retries": rpc.retry_count - retries_before,
         }
     )

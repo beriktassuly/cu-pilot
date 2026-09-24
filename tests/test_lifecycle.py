@@ -360,6 +360,49 @@ def test_failed_and_missing_control_labels_remain_failed(registry: ProfileRegist
     )
 
 
+_POLICY_CONTRACT = json.loads(
+    (Path(__file__).parent / "fixtures" / "lifecycle_policy_contract.json").read_text()
+)
+
+
+@pytest.mark.parametrize("case", _POLICY_CONTRACT["freshness_cases"])
+def test_shared_fractional_freshness_contract(
+    tmp_path: Path, artifact: str, case: dict[str, Any]
+) -> None:
+    if not case["valid"]:
+        with pytest.raises(ValidationError):
+            manifest(artifact, max_deployment_age_seconds=case["seconds"])
+        return
+    registry = ProfileRegistry(tmp_path / "profiles.sqlite")
+    release(registry, artifact, max_deployment_age_seconds=case["seconds"])
+    snapshot = registry.export_snapshot("batch", now=1000.0)
+    assert snapshot["manifest"]["max_deployment_age_seconds"] == case["seconds"]
+    assert registry.check("batch", **{**ENV, "now": 1000.0 + case["age"]}).eligible == case["fresh"]
+
+
+@pytest.mark.parametrize("case", _POLICY_CONTRACT["control_cases"])
+def test_shared_control_failure_threshold_contract(
+    tmp_path: Path, artifact: str, case: dict[str, Any]
+) -> None:
+    path = tmp_path / "profiles.sqlite"
+    release(ProfileRegistry(path), artifact, max_control_failure_streak=case["threshold"])
+    snapshot = ProfileRegistry(path).export_snapshot("batch", now=1000.0)
+    assert snapshot["manifest"]["max_control_failure_streak"] == case["threshold"]
+    for index, success in enumerate(case["success"]):
+        registry = ProfileRegistry(path)
+        request_id = f"shared-{index}"
+        select(registry, request_id)
+        registry.record_control(
+            request_id,
+            success=success,
+            compute_units=1000 if success else None,
+            loaded_accounts_bytes=2000 if success else None,
+            current_slot=400,
+            elapsed_ms=1,
+        )
+        assert ProfileRegistry(path).check("batch", **ENV).eligible != case["suspended"][index]
+
+
 def test_concurrent_reads_observe_whole_artifact_revisions(
     registry: ProfileRegistry, artifact: str
 ) -> None:

@@ -99,6 +99,7 @@ function release(offset = 0, revision = 1) {
       max_deployment_age_slots: 100,
       max_deployment_age_seconds: 60,
       control_probability: 1,
+      max_control_failure_streak: 3,
     },
     deployments: programs.map((p) => ({
       program_id: p,
@@ -128,6 +129,25 @@ function rpc(cu = 2000n, slot = 401n): EstimateOptions["rpc"] {
         context: { slot },
         value: { err: null, unitsConsumed: cu, loadedAccountsDataSize: 128 },
       }),
+    }),
+  } as unknown as EstimateOptions["rpc"];
+}
+function failedRpc(slot = 401n): EstimateOptions["rpc"] {
+  return {
+    simulateTransaction: () => ({
+      send: async () => ({
+        context: { slot },
+        value: { err: { InstructionError: [0, "Custom"] }, unitsConsumed: 1n },
+      }),
+    }),
+  } as unknown as EstimateOptions["rpc"];
+}
+function measurementRpc(
+  value: Record<string, unknown>,
+): EstimateOptions["rpc"] {
+  return {
+    simulateTransaction: () => ({
+      send: async () => ({ context: { slot: 401n }, value }),
     }),
   } as unknown as EstimateOptions["rpc"];
 }
@@ -405,4 +425,316 @@ test("journal refresh rejects prefix mutation, truncation and interrupted append
     else appendFileSync(path, '{"unfinished":');
     assert.throws(() => store.isSuspended("recoverable"), /control_journal/);
   }
+});
+
+test("shared released thresholds survive restart and preserve the next decision's policy", async () => {
+  const cases = JSON.parse(
+    readFileSync("../tests/fixtures/lifecycle_policy_contract.json", "utf8"),
+  ).control_cases;
+  for (const scenario of cases) {
+    const { path } = newStore(),
+      initial = release();
+    initial.release.manifest.max_control_failure_streak = scenario.threshold;
+    initial.release.manifest.control_probability = 0.5;
+    for (let index = 0; index < scenario.success.length; index++) {
+      const result = await estimateResources(message, {
+        ...initial,
+        ...initial.context,
+        controlStore: new FileControlStore(path),
+        rpc: scenario.success[index] ? rpc(600n) : failedRpc(),
+        controlDraw: 0,
+      });
+      assert.equal(result.controlSelected, true);
+      assert.equal(result.maxControlFailureStreak, scenario.threshold);
+      const reopened = new FileControlStore(path);
+      assert.equal(
+        reopened.isSuspended("recoverable"),
+        scenario.suspended[index],
+      );
+      let calls = 0;
+      const next = await estimateResources(message, {
+        ...initial,
+        ...initial.context,
+        controlStore: reopened,
+        controlDraw: 0.9,
+        rpc: {
+          simulateTransaction: () => {
+            calls++;
+            return {
+              send: async () => ({
+                context: { slot: 401n },
+                value: {
+                  err: null,
+                  unitsConsumed: 600n,
+                  loadedAccountsDataSize: 128,
+                },
+              }),
+            };
+          },
+        } as unknown as EstimateOptions["rpc"],
+      });
+      assert.equal(
+        next.status,
+        scenario.suspended[index] ? "simulation" : "prediction",
+      );
+      assert.equal(calls, scenario.suspended[index] ? 1 : 0);
+    }
+    const records = readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.ok(
+      records.every((r) => r.schema_version === "cu-pilot-controls-v2"),
+    );
+    assert.ok(
+      records
+        .filter((r) => r.kind === "decision")
+        .every((r) => r.payload.maxControlFailureStreak === scenario.threshold),
+    );
+  }
+});
+
+test("one journal enforces separate release thresholds and rejects same-release policy changes", async () => {
+  const { path, store } = newStore(),
+    first = release(),
+    second = release();
+  first.release.manifest.max_control_failure_streak = 1;
+  first.release.manifest.profile_id = "one";
+  second.release.manifest.profile_id = "three";
+  for (const initial of [second, first]) {
+    await estimateResources(message, {
+      ...initial,
+      ...initial.context,
+      controlStore: store,
+      controlDraw: 0,
+      rpc: failedRpc(),
+    });
+  }
+  const reopened = new FileControlStore(path);
+  assert.equal(reopened.isSuspended("one"), true);
+  assert.equal(reopened.isSuspended("three"), false);
+  const storedDecision = JSON.parse(
+    readFileSync(path, "utf8").split("\n")[0]!,
+  ).payload;
+  assert.throws(
+    () =>
+      reopened.recordDecision({
+        ...storedDecision,
+        observationId: "changed-policy",
+        maxControlFailureStreak: 1,
+      }),
+    /failure_policy/,
+  );
+  for (let index = 0; index < 2; index++) {
+    const next = await estimateResources(message, {
+      ...second,
+      ...second.context,
+      controlStore: new FileControlStore(path),
+      controlDraw: 0,
+      rpc: failedRpc(),
+    });
+    assert.equal(next.controlSelected, true);
+  }
+  assert.equal(new FileControlStore(path).isSuspended("three"), true);
+});
+
+test("recovery binds the new revision's threshold without resetting prior quarantine", async () => {
+  const { path, store } = newStore(),
+    { event } = await selected(store);
+  store.recordOutcome(event);
+  const request = recovery();
+  request.release.manifest.max_control_failure_streak = 1;
+  store.recover(request);
+  const reopened = new FileControlStore(path);
+  const failed = await estimateResources(message, {
+    ...request.context,
+    artifact: request.artifact,
+    release: request.release,
+    controlStore: reopened,
+    controlDraw: 0,
+    rpc: failedRpc(901n),
+  });
+  assert.equal(failed.maxControlFailureStreak, 1);
+  assert.equal(
+    new FileControlStore(path).isSuspended(
+      "recoverable",
+      2,
+      request.release.manifest.artifact_sha256,
+    ),
+    true,
+  );
+});
+
+test("an explicit constructor policy is a compatibility pin, never a release override", async () => {
+  const { path } = newStore(),
+    initial = release();
+  initial.release.manifest.max_control_failure_streak = 1;
+  const result = await estimateResources(message, {
+    ...initial,
+    ...initial.context,
+    controlStore: new FileControlStore(path, 3),
+    controlDraw: 0,
+    rpc: rpc(600n),
+  });
+  assert.equal(result.status, "unresolved");
+  assert.equal(result.reason, "incompatible_control_failure_policy");
+  assert.equal(result.limits, null);
+});
+
+test("old journals lacking release-bound thresholds fail closed and remain unchanged", async () => {
+  const { path, store } = newStore();
+  await selected(store);
+  const source = readFileSync(path, "utf8").replaceAll(
+    "cu-pilot-controls-v2",
+    "cu-pilot-controls-v1",
+  );
+  writeFileSync(path, source);
+  assert.throws(
+    () => new FileControlStore(path),
+    /incompatible_control_journal/,
+  );
+  assert.equal(readFileSync(path, "utf8"), source);
+});
+
+test("partial successful controls suspend on either known excess despite a missing counterpart", async () => {
+  for (const threshold of [1, 3]) {
+    for (const value of [
+      { err: null, unitsConsumed: 2000n },
+      { err: null, loadedAccountsDataSize: 40000 },
+      { err: null, unitsConsumed: 2000n, loadedAccountsDataSize: "128" },
+      { err: null, unitsConsumed: 600, loadedAccountsDataSize: 40000 },
+    ]) {
+      const { path, store } = newStore(),
+        initial = release();
+      initial.release.manifest.max_control_failure_streak = threshold;
+      let event: ControlObservation | undefined;
+      const result = await estimateResources(message, {
+        ...initial,
+        ...initial.context,
+        controlStore: store,
+        controlDraw: 0,
+        rpc: measurementRpc(value),
+        onControl: (observation) => {
+          event = observation;
+        },
+      });
+      assert.equal(result.status, "unresolved");
+      assert.equal(result.reason, "missing_or_invalid_measurement");
+      assert.equal(result.limits, null);
+      assert.equal(result.unsignedMessage, null);
+      assert.equal(event!.simulation.status, "incomplete");
+      assert.equal(event!.resourceExcess, true);
+      assert.equal(new FileControlStore(path).isSuspended("recoverable"), true);
+      if (typeof value.unitsConsumed === "bigint") {
+        assert.equal(event!.simulation.computeUnits, 2000);
+        assert.equal(event!.simulation.loadedAccountsBytes, null);
+      } else {
+        assert.equal(event!.simulation.computeUnits, null);
+        assert.equal(event!.simulation.loadedAccountsBytes, 40000);
+      }
+    }
+  }
+});
+
+test("incomplete under-limit controls count against each released failure threshold across restart", async () => {
+  for (const threshold of [1, 3]) {
+    for (const value of [
+      { err: null, unitsConsumed: 600n },
+      { err: null, loadedAccountsDataSize: 128 },
+      { err: null },
+    ]) {
+      const { path } = newStore(),
+        initial = release();
+      initial.release.manifest.max_control_failure_streak = threshold;
+      for (let count = 1; count <= threshold; count++) {
+        const result = await estimateResources(message, {
+          ...initial,
+          ...initial.context,
+          controlStore: new FileControlStore(path),
+          controlDraw: 0,
+          rpc: measurementRpc(value),
+        });
+        assert.equal(result.status, "unresolved");
+        assert.equal(result.simulation!.status, "incomplete");
+        assert.equal(
+          new FileControlStore(path).isSuspended("recoverable"),
+          count === threshold,
+        );
+      }
+    }
+  }
+});
+
+test("transaction-error partial usage is never successful resource demand", async () => {
+  for (const threshold of [1, 3]) {
+    const { path } = newStore(),
+      initial = release();
+    initial.release.manifest.max_control_failure_streak = threshold;
+    for (let count = 1; count <= threshold; count++) {
+      let event: ControlObservation | undefined;
+      const result = await estimateResources(message, {
+        ...initial,
+        ...initial.context,
+        controlStore: new FileControlStore(path),
+        controlDraw: 0,
+        rpc: measurementRpc({
+          err: { InstructionError: [0, "Custom"] },
+          unitsConsumed: 2000n,
+          loadedAccountsDataSize: 40000,
+        }),
+        onControl: (observation) => {
+          event = observation;
+        },
+      });
+      assert.equal(result.status, "unresolved");
+      assert.equal(result.reason, "transaction_error");
+      assert.equal(event!.simulation.status, "failed");
+      assert.equal(event!.simulation.computeUnits, null);
+      assert.equal(event!.simulation.loadedAccountsBytes, null);
+      assert.equal(event!.resourceExcess, false);
+      assert.equal(
+        new FileControlStore(path).isSuspended("recoverable"),
+        count === threshold,
+      );
+    }
+  }
+});
+
+test("partial control validation rejects fabricated or suppressed excess before writing", async () => {
+  const { path, store } = newStore(),
+    initial = release();
+  let event: ControlObservation | undefined;
+  const proxy: ControlStore = {
+    isSuspended: (...args) => store.isSuspended(...args),
+    recordDecision: (decision) => store.recordDecision(decision),
+    recordOutcome: (outcome) => {
+      event = outcome;
+    },
+  };
+  const result = await estimateResources(message, {
+    ...initial,
+    ...initial.context,
+    controlStore: proxy,
+    controlDraw: 0,
+    rpc: measurementRpc({ err: null, unitsConsumed: 2000n }),
+  });
+  assert.equal(result.status, "unresolved");
+  assert.ok(event);
+  const original = readFileSync(path, "utf8");
+  const mutations: ControlObservation[] = [
+    { ...event, resourceExcess: false },
+    { ...event, simulation: { ...event.simulation, slot: null } },
+    { ...event, simulation: { ...event.simulation, status: "success" } },
+    { ...event, simulation: { ...event.simulation, status: "failed" } },
+    { ...event, simulation: { ...event.simulation, computeUnits: null } },
+    { ...event, simulation: { ...event.simulation, loadedAccountsBytes: 128 } },
+    { ...event, simulation: { ...event.simulation, computeUnits: -1 } },
+  ];
+  for (const invalid of mutations) {
+    assert.throws(() => store.recordOutcome(invalid));
+    assert.equal(readFileSync(path, "utf8"), original);
+    assert.equal(new FileControlStore(path).isSuspended("recoverable"), false);
+  }
+  store.recordOutcome(event);
+  assert.equal(new FileControlStore(path).isSuspended("recoverable"), true);
 });
