@@ -237,7 +237,7 @@ def normalize_observation(
     """Normalize historical-shaped records without admitting metadata as features.
 
     Simulation responses alone contain no message and cannot be parsed here. Join
-    them with their submitted message via the simulation collection adapter.
+    them with their original pre-execution message in a caller-side collection adapter.
     """
     from cu_pilot.features import extract_features
 
