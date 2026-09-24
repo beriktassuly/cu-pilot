@@ -110,6 +110,50 @@ uv run cu-pilot shadow requests.jsonl artifacts/replay.sqlite --replay
 uv run cu-pilot export-shadow artifacts/events.sqlite artifacts/audit.jsonl
 ```
 
+For initial qualification before any profile is released, populate the registry
+through the bounded `refresh_deployments(registry, rpc, program_ids, ...)` watcher,
+using verified cluster/runtime identities, then supply `--registry` alone (library
+equivalent: `registry=` on `collect_shadow`). The collector freezes already cached
+watcher evidence for the bound message's actual top-level programs without another
+RPC read. Configure bootstrap expiry with `EstimationContext.max_deployment_age_slots`
+and `max_deployment_age_seconds` (defaults 100 slots and 60 seconds). The caller must
+refresh the watcher during longer collections; its reads and latency belong in
+reported collection costs.
+
+```sh
+uv run cu-pilot shadow requests.jsonl artifacts/events.sqlite --registry artifacts/profiles.sqlite
+```
+
+For a released profile, add `--profile` (library equivalent: `profile_id=`); this
+uses the manifest's reviewed dependency closure and release policy:
+
+```sh
+uv run cu-pilot shadow requests.jsonl artifacts/events.sqlite --registry artifacts/profiles.sqlite --profile controlled-batch --model artifacts/resources.json
+```
+
+The frozen `DecisionPlan` records `deployment_snapshot` and
+`deployment_evidence_status`. An `eligible` snapshot captures the manifest,
+dependency fingerprints, deployment slots, watcher timestamps, release state,
+emergency flags, check time and slot in the same registry transaction as the
+eligibility check. `observed_unreleased` records fresh cached top-level program
+observations before release, explicitly setting `dependency_closure_verified`,
+`release_authorized` and `eligible` to false. It never enables skipping and does
+not imply that CPI dependencies or budget independence were reviewed. `ineligible`
+preserves stale, incompatible or failed evidence; `unavailable` means evidence is
+missing (the bootstrap snapshot lists missing programs) or no registry was supplied
+(null snapshot). Old plans missing these optional fields default to unavailable.
+Neither missing nor ineligible evidence is presented as verified deployment eligibility. The artifact
+digest is retained without duplicating the full artifact in every observation.
+Runtime/cluster/workload context strings remain explicit application inputs; a
+snapshot does not infer deployment epochs for an untracked historical dataset.
+
+Shadow collection still simulates every request when a registry is supplied. If an
+eligible decision is sampled for a control, that same shadow simulation is recorded
+as a separate control audit, preserving its pre-label selection probability and
+decision revision. This causes no second simulation and does not count an avoided
+call. The observation result commits before the registry control audit; after an
+interruption the exact stored outcome can finish that audit without resimulation.
+
 SQLite schema version 1 uses WAL, parameterized queries, foreign keys and durable transactions.
 The single synchronous worker has concurrency one and no prefetched queue, providing natural
 backpressure and bounded memory. Each invocation has a record bound and the RPC has a request
@@ -119,6 +163,9 @@ prediction. A completed ID is deduplicated; changed inputs or changed frozen pre
 the same ID raise a conflict and retain a conflict digest. Transport retries remain attempts of
 one observation, never extra support. Resume reads the stream to verify IDs, so it is safe for
 small append-only files rather than an unbounded backfill platform.
+On resume, older valid `ShadowRequest` inputs compare using schema defaults for
+new optional fields. The original stored input and pre-label plan remain unchanged;
+different settings still conflict, and arbitrary untyped records require exact equality.
 
 Failed/missing-label observations remain in the audit export. Resource fitting excludes them;
 partial failed execution does not represent successful demand. Simulation labels are

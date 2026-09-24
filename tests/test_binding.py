@@ -253,3 +253,41 @@ def test_shadow_freezes_prediction_resumes_and_reconciles(tmp_path):
         assert simulation_rows[0].label.compute_units == 600
         assert execution_rows[0].label.compute_units == 650
         assert execution_rows[0].label.loaded_accounts_bytes is None
+
+
+def test_lookup_read_newer_than_builder_slot_advances_context():
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "kit" / "0.json").read_text())
+    key, addresses = next(iter(fixture["lookup"]["tables"].items()))
+    header = (1).to_bytes(4, "little") + (2**64 - 1).to_bytes(8, "little") + bytes(44)
+    raw = header + b"".join(bytes(Pubkey.from_string(address)) for address in addresses)
+    methods = []
+
+    def handler(request):
+        call = json.loads(request.content)
+        methods.append(call["method"])
+        if call["method"] == "getAccountInfo":
+            assert call["params"][0] == key
+            return httpx.Response(
+                200,
+                json={
+                    "id": 1,
+                    "result": {
+                        "context": {"slot": 11},
+                        "value": {
+                            "executable": False,
+                            "owner": "AddressLookupTab1e1111111111111111111111111",
+                            "data": [base64.b64encode(raw).decode(), "base64"],
+                        },
+                    },
+                },
+            )
+        assert call["params"][1]["minContextSlot"] == 11
+        return httpx.Response(200, json=rpc_response(slot=11))
+
+    with RpcClient("http://example.invalid", transport=httpx.MockTransport(handler)) as rpc:
+        result = estimate_resources(fixture["wireBase64"], rpc=rpc, context=context())
+    assert result.status == "simulation_success"
+    assert result.plan.context.current_slot == 11
+    assert result.plan.state_reads == 1
+    assert result.rpc_attempts == 2
+    assert methods == ["getAccountInfo", "simulateTransaction"]

@@ -20,7 +20,7 @@ from cu_pilot.schemas import Prediction, PredictRequest, TransactionInput
 app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
-    help="Conservative Solana compute prediction with simulation fallback.",
+    help="Bound Solana resource estimates with explicit simulation fallback.",
 )
 app.add_typer(integration_app)
 app.add_typer(lifecycle_app, name="profiles")

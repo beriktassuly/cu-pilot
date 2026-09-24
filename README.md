@@ -1,6 +1,6 @@
 # CU Pilot
 
-**CU Pilot learns when simulation is unnecessary.**
+**CU Pilot learns when a separate resource-estimation simulation is unnecessary.**
 
 A local Python and TypeScript integration for controlled families of Solana transactions.
 It fits paired compute-unit and loaded-account-data quantiles, checks their joint resource
@@ -58,6 +58,8 @@ remain explicit overhead. Old CU-only artifacts cannot authorize dual-resource s
 Read [integration and collection](docs/integration.md), [joint resource model](docs/resource-model.md),
 [TypeScript](docs/typescript.md), [profile operations](docs/lifecycle.md), and
 [real local runtime tests](docs/local-runtime.md) for complete commands and limitations.
+The [verification report](docs/verification.md) records test results, measured costs,
+and the remaining production-validation boundary.
 
 `cu-pilot estimate-resources transaction.base64 --context context.json` uses the endpoint in
 `CU_PILOT_RPC_URL` and returns `accepted_prediction`, `simulation_success`, or `unresolved`.
@@ -107,7 +109,7 @@ Run the command to inspect the full comparison; these numbers are deliberately s
 - Explicit read-only RPC collection and simulation commands, a CLI, and an inference API.
 - Offline parser, policy, RPC failure, API, CLI, and evaluation regression tests; CI and locked dependencies.
 
-The default estimator predicts **CU only**. v1 inputs always recommend simulation because
+The original compatibility estimator predicts **CU only**. v1 inputs recommend simulation because
 they also need a validated loaded-account-data limit. Legacy/v0 inputs with a restrictive
 explicit loaded-data cap also fall back. The simulation helper returns both resources when
 the node supplies them and requires both for v1.
@@ -131,7 +133,8 @@ flowchart LR
 instructions, balances, slot, signatures, and fees are not predictive features.
 The observation slot is used for ordering and freshness. Caller-selected `context` scopes
 a model to a cluster, runtime/program deployment, and workload policy. Change it after a
-relevant deployment or runtime change; CU Pilot does not discover upgrades automatically.
+relevant deployment or runtime change. This original compatibility path does not use the
+deployment watcher provided by the integrated resource workflow.
 
 For data contracts and assumptions, see [data flow](docs/data-flow.md),
 [patterns](docs/patterns.md), [model policy](docs/model.md), and [research](docs/research.md).

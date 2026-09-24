@@ -1,9 +1,40 @@
 import pytest
 from test_resources import features, observations
 
-from cu_pilot.resource_evaluation import PreparationTrace, evaluate_resources, preparation_report
+from cu_pilot.resource_evaluation import (
+    PreparationTrace,
+    configured_priority_fee,
+    evaluate_resources,
+    preparation_report,
+)
 from cu_pilot.resources import ResourcePolicy
 from cu_pilot.schemas import ResourceLabel
+
+
+def test_priority_fee_rounding_precision_and_v1_absolute_fee() -> None:
+    assert configured_priority_fee(features(requested_micro_lamports=1), 100) == 1
+    assert configured_priority_fee(features(requested_micro_lamports=200), 100_000) == 20
+    high = 2**64 - 1
+    assert configured_priority_fee(features(requested_micro_lamports=high), 1_400_000) == high
+    v1 = features(version=1, requested_priority_fee_lamports=high)
+    assert configured_priority_fee(v1, 100) == configured_priority_fee(v1, 1_400_000) == high
+    assert configured_priority_fee(features(), 100) == 0
+    invalid = features(risk_flags=("duplicate_compute_budget_instruction",))
+    assert configured_priority_fee(invalid, 100) is None
+
+
+def test_fee_report_uses_final_limits_and_exact_decimal_strings() -> None:
+    rows = [
+        row.model_copy(update={"features": features(requested_micro_lamports=2**53 + 1)})
+        for row in observations(1000)
+    ]
+    report = evaluate_resources(rows)
+    fees = report["methods"]["joint_statistical_policy"]["configured_priority_fees"]
+    expected = (2**53 + 1) * 1100
+    expected = (expected + 999_999) // 1_000_000
+    assert fees["by_version"]["legacy"]["total_lamports"] == str(200 * expected)
+    assert fees["observed_fee_savings_lamports"] is None
+    assert report["methods"]["always_simulate"]["configured_priority_fees"]["by_version"] == {}
 
 
 def test_competitors_and_full_policy_require_lifecycle_evidence() -> None:

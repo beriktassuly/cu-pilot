@@ -32,6 +32,62 @@ Eligibility = Callable[[Features, int], str | None]
 CallerPolicy = Callable[[Features, int], Limits]
 
 
+def configured_priority_fee(features: Features, compute_unit_limit: int) -> int | None:
+    """Calculate configured lamports, not the charged base fee or landing outcome.
+
+    Agave uses ceil(price * requested CU / 1e6), saturating to u64 for
+    legacy/v0. v1 stores an absolute fee, independent of either resource limit.
+    Ambiguous/invalid budget inputs remain unscored.
+    """
+    if type(compute_unit_limit) is not int or not 0 < compute_unit_limit <= MAX_COMPUTE_UNITS:
+        raise ValueError("fee calculation requires a valid final compute limit")
+    if {"invalid_compute_budget_instruction", "duplicate_compute_budget_instruction"}.intersection(
+        features.risk_flags
+    ):
+        return None
+    if features.version == 1:
+        if features.requested_micro_lamports is not None:
+            return None
+        fee = features.requested_priority_fee_lamports
+    else:
+        if features.requested_priority_fee_lamports is not None:
+            return None
+        fee = features.requested_micro_lamports
+    fee = 0 if fee is None else fee
+    if type(fee) is not int or not 0 <= fee < 2**64:
+        return None
+    if features.version == 1:
+        return fee
+    return min(2**64 - 1, (fee * compute_unit_limit + 999_999) // 1_000_000)
+
+
+def _fee_summary(rows: list[Observation], limits: list[Limits]) -> dict[str, Any]:
+    by_version: dict[str, list[int]] = {}
+    unscored = 0
+    for row, limit in zip(rows, limits, strict=True):
+        if limit is None:
+            continue
+        fee = configured_priority_fee(row.features, limit[0])
+        if fee is None:
+            unscored += 1
+        else:
+            by_version.setdefault(str(row.features.version), []).append(fee)
+    return {
+        "basis": "configured priority fees for proposed limits; not observed charged total fees",
+        "unscored_proposals": unscored,
+        "by_version": {
+            version: {
+                "count": len(values),
+                "min_lamports": str(min(values)),
+                "max_lamports": str(max(values)),
+                "total_lamports": str(sum(values)),
+            }
+            for version, values in sorted(by_version.items())
+        },
+        "observed_fee_savings_lamports": None,
+    }
+
+
 class PreparationTrace(StrictModel):
     """One caller-measured wall-clock span around the complete preparation path."""
 
@@ -141,6 +197,7 @@ def _summary(rows: list[Observation], limits: list[Limits], controls: list[bool]
         "counterfactual_net_calls_avoided": accepted - sum(controls),
         "measured_avoided_calls": None,
         "preflight_or_validation_calls_avoided": 0,
+        "configured_priority_fees": _fee_summary(rows, limits),
     }
 
 
@@ -400,7 +457,8 @@ def evaluate_resources(
             "Controls are selected eligible predictions, not fully observed deployment traffic.",
             "Window maxima reduce burst duplication; windows are not guaranteed independent.",
             "Fixed, cache and ungated baselines do not establish acceptable joint risk.",
-            "Fees and landing are unmeasured; v1 absolute priority fees do not fall with CU.",
+            "Charged fees and landing are unmeasured; configured priority fees are calculated.",
+            "Unchanged v1 absolute priority fees do not fall with CU or data limits.",
             "No preflight or indispensable business-validation simulation is counted as removable.",
         ],
     }

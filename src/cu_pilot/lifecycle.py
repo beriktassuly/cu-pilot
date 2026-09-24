@@ -116,6 +116,7 @@ class Eligibility(StrictModel):
     revision: int | None = None
     artifact_sha256: str | None = None
     control_probability: float = 0
+    evidence_snapshot: dict[str, Any] | None = None
 
 
 class ControlSelection(StrictModel):
@@ -422,6 +423,7 @@ class ProfileRegistry:
         workload: str,
         program_ids: Sequence[str],
         now: float,
+        calibration_min_slot: int | None,
     ) -> str | None:
         if context != manifest.context:
             return "context_mismatch"
@@ -456,6 +458,10 @@ class ProfileRegistry:
                 return "deployment_context_mismatch"
             if actual.fingerprint != expected:
                 return "deployment_changed"
+            if actual.deployment_slot is not None and (
+                calibration_min_slot is None or actual.deployment_slot >= calibration_min_slot
+            ):
+                return "deployment_not_covered_by_calibration"
             slot_age = current_slot - actual.observed_slot
             time_age = now - actual.checked_at
             if (
@@ -522,6 +528,7 @@ class ProfileRegistry:
                 workload=workload,
                 program_ids=program_ids,
                 now=_timestamp(now),
+                calibration_min_slot=model.calibration_min_slot,
             )
             if rejected:
                 raise ValueError(f"Profile release rejected: {rejected}")
@@ -596,6 +603,7 @@ class ProfileRegistry:
         now: float | None = None,
     ) -> Eligibility:
         _slot(current_slot)
+        checked_at = _timestamp(now)
         with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             pointer = db.execute("SELECT revision FROM active WHERE id=?", (profile_id,)).fetchone()
@@ -605,6 +613,8 @@ class ProfileRegistry:
                 )
             row = self._profile(db, profile_id, pointer[0])
             manifest = ProfileManifest.model_validate_json(row["manifest"])
+            # Artifact bytes were fully validated at registration and are immutable.
+            calibration = json.loads(row["artifact"])["calibration_min_slot"]
             reason = None
             if (
                 db.execute("SELECT value FROM settings WHERE key='force_simulation'").fetchone()[0]
@@ -629,7 +639,8 @@ class ProfileRegistry:
                     runtime_identity=runtime_identity,
                     workload=workload,
                     program_ids=program_ids,
-                    now=_timestamp(now),
+                    now=checked_at,
+                    calibration_min_slot=int(calibration) if calibration is not None else None,
                 )
                 if reason in {
                     "stale_observations",
@@ -638,8 +649,25 @@ class ProfileRegistry:
                     "deployment_watcher_failed",
                     "deployment_evidence_missing",
                     "deployment_context_mismatch",
+                    "deployment_not_covered_by_calibration",
                 }:
                     self._suspend(db, profile_id, manifest.revision, reason, current_slot)
+            checked_row = self._profile(db, profile_id, manifest.revision)
+            settings = dict(db.execute("SELECT key,value FROM settings"))
+            deployment_snapshot = []
+            for program in manifest.deployment_bindings:
+                cached = db.execute(
+                    "SELECT payload FROM evidence WHERE program=?", (program,)
+                ).fetchone()
+                if cached is not None:
+                    item = json.loads(cached[0])
+                    for key in ("deployment_slot", "observed_slot"):
+                        if item[key] is not None:
+                            item[key] = str(item[key])
+                    deployment_snapshot.append(item)
+            manifest_snapshot = manifest.model_dump(mode="json")
+            for key in ("evidence_min_slot", "evidence_max_slot"):
+                manifest_snapshot[key] = str(manifest_snapshot[key])
             return Eligibility(
                 eligible=reason is None,
                 reason=reason or "active",
@@ -647,6 +675,20 @@ class ProfileRegistry:
                 revision=manifest.revision,
                 artifact_sha256=manifest.artifact_sha256,
                 control_probability=manifest.control_probability,
+                evidence_snapshot=dict(
+                    schema_version="cu-pilot-deployment-decision-v1",
+                    checked_at=checked_at,
+                    current_slot=str(current_slot),
+                    manifest=manifest_snapshot,
+                    deployments=deployment_snapshot,
+                    state=checked_row["state"],
+                    quarantine=checked_row["quarantine"],
+                    force_simulation=settings.get("force_simulation") == "true",
+                    watcher_failed=settings.get("watcher_failure") == "true",
+                    artifact_calibration_min_slot=calibration,
+                    eligible=reason is None,
+                    reason=reason or "active",
+                ),
             )
 
     def active_snapshot(self, profile_id: str) -> tuple[ProfileManifest, bytes, str]:
@@ -720,6 +762,90 @@ class ProfileRegistry:
                 deployments=deployments,
                 force_simulation=settings.get("force_simulation") == "true",
                 watcher_failed=settings.get("watcher_failure") == "true",
+            )
+
+    def cached_deployment_snapshot(
+        self,
+        program_ids: Sequence[str],
+        *,
+        current_slot: int,
+        context: str,
+        cluster_identity: str,
+        runtime_identity: str,
+        max_age_slots: int = 100,
+        max_age_seconds: float = 60.0,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Audit fresh watcher observations before a profile exists, without RPC.
+
+        Only supplied top-level programs are covered. This snapshot establishes
+        neither a reviewed dependency closure nor authorization to skip simulation.
+        """
+        _slot(current_slot)
+        _slot(max_age_slots)
+        checked_at = _timestamp(now)
+        if (
+            isinstance(max_age_seconds, bool)
+            or not math.isfinite(max_age_seconds)
+            or not 0 < max_age_seconds <= 3600
+        ):
+            raise ValueError("Invalid bootstrap deployment freshness policy")
+        programs = list(dict.fromkeys(program_ids))
+        if not programs or len(programs) > 100:
+            raise ValueError("Bootstrap snapshot requires 1 to 100 top-level programs")
+        for program in programs:
+            validate_pubkey(program)
+        with self._connection() as db:
+            db.execute("BEGIN")
+            settings = dict(db.execute("SELECT key,value FROM settings"))
+            deployments = []
+            problems: dict[str, str] = {}
+            for program in programs:
+                row = db.execute(
+                    "SELECT payload FROM evidence WHERE program=?", (program,)
+                ).fetchone()
+                if row is None:
+                    problems[program] = "deployment_evidence_missing"
+                    continue
+                evidence = DeploymentEvidence.model_validate_json(row[0])
+                item = evidence.model_dump(mode="json")
+                for key in ("deployment_slot", "observed_slot"):
+                    if item[key] is not None:
+                        item[key] = str(item[key])
+                deployments.append(item)
+                if (
+                    evidence.cluster_identity != cluster_identity
+                    or evidence.runtime_identity != runtime_identity
+                ):
+                    problems[program] = "deployment_context_mismatch"
+                elif not 0 <= current_slot - evidence.observed_slot <= max_age_slots:
+                    problems[program] = "deployment_slot_stale_or_future"
+                elif not 0 <= checked_at - evidence.checked_at <= max_age_seconds:
+                    problems[program] = "deployment_time_stale_or_future"
+            watcher_failed = settings.get("watcher_failure") == "true"
+            fresh = not problems and not watcher_failed
+            return dict(
+                schema_version="cu-pilot-bootstrap-deployments-v1",
+                status="observed_unreleased"
+                if fresh
+                else "ineligible"
+                if deployments
+                else "unavailable",
+                checked_at=checked_at,
+                current_slot=str(current_slot),
+                context=context,
+                cluster_identity=cluster_identity,
+                runtime_identity=runtime_identity,
+                program_ids=programs,
+                deployments=deployments,
+                problems=problems,
+                watcher_failed=watcher_failed,
+                force_simulation=settings.get("force_simulation") == "true",
+                max_age_slots=str(max_age_slots),
+                max_age_seconds=max_age_seconds,
+                dependency_closure_verified=False,
+                release_authorized=False,
+                eligible=False,
             )
 
     def force_simulation(self, enabled: bool, *, actor: str, reason: str) -> None:

@@ -16,7 +16,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from cu_pilot.binding import (
     LookupEvidence,
@@ -132,7 +132,17 @@ class ObservationStore:
             ).rowcount
         row = self.db.execute("SELECT input FROM observations WHERE id=?", (identifier,)).fetchone()
         if row[0] != payload:
-            self._conflict(identifier, "input", payload)
+            # Schema additions may supply defaults that were absent in a durable
+            # older request. Compare validated values without rewriting original
+            # input or its pre-label plan. Arbitrary ingest payloads remain exact.
+            try:
+                previous = ShadowRequest.model_validate_json(row[0])
+                incoming = ShadowRequest.model_validate_json(payload)
+                equivalent = previous.model_dump() == incoming.model_dump()
+            except ValidationError:
+                equivalent = False
+            if not equivalent:
+                self._conflict(identifier, "input", payload)
         return bool(changed)
 
     def get(self, identifier: str) -> dict[str, Any]:
@@ -467,14 +477,34 @@ def collect_shadow(
     store: ObservationStore,
     rpc: RpcClient,
     estimator: ResourceEstimator | None = None,
+    registry: ProfileRegistry | None = None,
+    profile_id: str | None = None,
     stream: str = "default",
     max_records: int = 1000,
     cancellation: threading.Event | None = None,
 ) -> dict[str, int]:
     if type(max_records) is not int or not 1 <= max_records <= 100_000:
         raise ValueError("collection bound must be between 1 and 100000")
+
+    def audit_control(result: dict[str, Any]) -> None:
+        if registry is None or result.get("plan") is None:
+            return
+        frozen = DecisionPlan.model_validate(result["plan"])
+        if not frozen.control_selected:
+            return
+        simulation = result.get("simulation")
+        registry.record_control(
+            frozen.observation_id,
+            success=simulation is not None,
+            compute_units=simulation["units_consumed"] if simulation else None,
+            loaded_accounts_bytes=simulation["loaded_accounts_bytes"] if simulation else None,
+            current_slot=simulation["slot"] if simulation else frozen.context.current_slot,
+            elapsed_ms=simulation["elapsed_ms"] if simulation else result["full_preparation_ms"],
+        )
+
     completed = unresolved = resumed = 0
-    # Re-read preceding rows to detect changed/reordered input, then deduplicate by ID.
+    # Re-read to detect conflicting IDs; reordering is safe because deduplication
+    # uses request identity rather than trusting an old positional checkpoint.
     for cursor, request in enumerate(requests, 1):
         if completed >= max_records or (cancellation is not None and cancellation.is_set()):
             break
@@ -483,6 +513,8 @@ def collect_shadow(
         store.ingest(request.observation_id, request.model_dump(mode="json"))
         prior = store.get(request.observation_id)
         if prior["phase"] == "complete":
+            store.finish(request.observation_id, prior["result"], stream=stream, cursor=cursor)
+            audit_control(prior["result"])
             resumed += 1
             continue
         try:
@@ -492,6 +524,8 @@ def collect_shadow(
                     context=request.context,
                     rpc=rpc,
                     estimator=estimator,
+                    registry=registry,
+                    profile_id=profile_id,
                     observation_id=request.observation_id,
                     lookups={table.address: table for table in request.lookups},
                 )
@@ -511,6 +545,9 @@ def collect_shadow(
                 shadow=True,
             ).model_dump(mode="json")
         store.finish(request.observation_id, result, stream=stream, cursor=cursor)
+        # The primary label commits first. A crash during registry auditing can
+        # replay this exact frozen outcome without resimulation or double counting.
+        audit_control(result)
         # Includes input/plan writes, preparation, simulation and atomic result+
         # checkpoint durability. Telemetry's own final write is outside the span.
         elapsed = (time.perf_counter() - collection_started) * 1000

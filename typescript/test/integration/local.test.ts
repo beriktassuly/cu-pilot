@@ -24,6 +24,7 @@ import {
   FIXTURE_TABLE,
 } from "../../src/builder.js";
 import { estimateResources } from "../../src/runtime.js";
+import { resolveLookupTables } from "../../src/lookups.js";
 import {
   type BuilderMessage,
   type LookupEvidence,
@@ -62,7 +63,7 @@ test(
       const versionInfo = await rpc.getVersion().send();
       for (const version of ["legacy", 0, 1] as const) {
         surf.timeTravelToSlot(100 + reports.length * 10);
-        const currentSlot = await rpc
+        let currentSlot = await rpc
           .getSlot({ commitment: "confirmed" })
           .send();
         const { value: lifetime } = await rpc
@@ -99,11 +100,12 @@ test(
             table.programAddress,
             "AddressLookupTab1e1111111111111111111111111",
           );
-          lookup = {
-            tables: { [FIXTURE_TABLE]: table.data.addresses },
-            checkedSlot: currentSlot,
+          lookup = await resolveLookupTables(rpc, [FIXTURE_TABLE], {
+            currentSlot,
             cluster: "local-surfpool",
-          };
+          });
+          currentSlot = lookup.checkedSlot;
+          assert.deepEqual(lookup.tables[FIXTURE_TABLE], table.data.addresses);
           message = compressTransactionMessageUsingAddressLookupTables(
             message,
             lookup.tables,
@@ -235,6 +237,70 @@ test(
         abortSignal: controller.signal,
       });
       assert.equal(cancelled.reason, "cancelled");
+      // A previously absent recipient is created by real System execution, then
+      // locally closed and recreated. Account-state changes never rewrite labels.
+      const newRecipient = address("11111111111111111111111111111115");
+      const creationOutcomes = [];
+      for (const phase of ["create", "recreate"]) {
+        if (phase === "recreate")
+          surf.setAccount(
+            newRecipient,
+            0,
+            [],
+            "11111111111111111111111111111111",
+          );
+        const { value: life } = await rpc.getLatestBlockhash().send();
+        const creation = buildTransferBatch({
+          version: 0,
+          payer,
+          destinations: [newRecipient],
+          amounts: [1000000n],
+          blockhash: life.blockhash,
+          lastValidBlockHeight: life.lastValidBlockHeight,
+        });
+        const decision = await estimateResources(creation, {
+          rpc,
+          currentSlot: await rpc.getSlot().send(),
+          cluster: "local-surfpool",
+          runtime: "surfpool-1.5.0",
+          context: "local:batch",
+          workload: "system-transfer-batch",
+          budgetIndependent: true,
+        });
+        assert.equal(decision.status, "simulation", canonical(decision));
+        assert.notEqual(
+          decision.prepared!.features.pattern_id,
+          reports[0] &&
+            bindMessage(
+              buildTransferBatch({
+                version: 0,
+                payer,
+                destinations: [newRecipient, newRecipient],
+                amounts: [1n, 1n],
+                blockhash: life.blockhash,
+                lastValidBlockHeight: life.lastValidBlockHeight,
+              }),
+            ).features.pattern_id,
+        );
+        const signedCreation = await signTransaction(
+          [key],
+          compileTransaction(decision.unsignedMessage!),
+        );
+        await rpc
+          .sendTransaction(getBase64EncodedWireTransaction(signedCreation), {
+            encoding: "base64",
+            skipPreflight: false,
+            preflightCommitment: "confirmed",
+          })
+          .send();
+        const balance = await rpc.getBalance(newRecipient).send();
+        assert.equal(balance.value, 1000000n);
+        creationOutcomes.push({
+          phase,
+          computeUnits: decision.simulation!.computeUnits,
+          loadedAccountsBytes: decision.simulation!.loadedAccountsBytes,
+        });
+      }
       const report = {
         evidence: "local-runtime",
         node: process.version,
@@ -243,6 +309,7 @@ test(
         surfpool: "1.5.0",
         runtime: versionInfo,
         cases: reports,
+        accountCreation: creationOutcomes,
         limits:
           "Local controlled workload only; no production reliability or latency claim.",
       };

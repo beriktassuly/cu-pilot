@@ -19,6 +19,7 @@ from cu_pilot.lifecycle import (
     ProfileRegistry,
     artifact_digest,
     deployment_identity,
+    refresh_deployments,
 )
 from cu_pilot.resource_evaluation import preparation_report
 from cu_pilot.resources import ResourceEstimator
@@ -35,7 +36,7 @@ def client(slot=10):
     )
 
 
-def release_for_wire(path: Path, wire: str):
+def release_for_wire(path: Path, wire: str, *, control_probability: float = 0):
     ctx = context().model_copy(update={"current_slot": 400})
     features = bind_message(wire, current_slot=400).features
     # Simulated-source contract fixture, never exported or represented as evidence
@@ -85,7 +86,7 @@ def release_for_wire(path: Path, wire: str):
         evidence_min_slot=0,
         evidence_max_slot=399,
         provenance="simulation",
-        control_probability=0,
+        control_probability=control_probability,
     )
     registry = ProfileRegistry(path)
     registry.register(manifest, payload, actor="test-operator")
@@ -340,3 +341,261 @@ def test_result_message_cannot_mutate_between_collection_and_reconciliation(tmp_
         signed = base64.b64encode(bytes(VersionedTransaction(message, [payer]))).decode()
         with pytest.raises(ValueError, match="message changed"):
             store.attach_signature("mutated", signed)
+
+
+def test_shadow_freezes_atomic_deployment_snapshot_and_records_ineligible_checks(tmp_path):
+    wire = unsigned_wire(builder())
+    ctx, estimator, registry = release_for_wire(tmp_path / "deployment.sqlite", wire)
+    request = ShadowRequest(
+        observation_id="deployment-first",
+        wire_base64=wire,
+        context=ctx,
+        evidence_origin="synthetic",
+    )
+    with ObservationStore(tmp_path / "deployment-events.sqlite") as store:
+
+        def handler(_):
+            plan = store.get("deployment-first")["plan"]
+            assert plan["deployment_evidence_status"] == "eligible"
+            snapshot = plan["deployment_snapshot"]
+            assert snapshot["eligible"] is True
+            assert snapshot["current_slot"] == "400"
+            assert snapshot["manifest"]["artifact_sha256"] == plan["artifact_digest"]
+            assert len(snapshot["deployments"]) == len(set(plan["features"]["program_ids"]))
+            assert "artifact_canonical_json" not in snapshot
+            return httpx.Response(200, json=rpc_response(slot=400))
+
+        with RpcClient("http://example.invalid", transport=httpx.MockTransport(handler)) as rpc:
+            collect_shadow(
+                [request],
+                store=store,
+                rpc=rpc,
+                estimator=estimator,
+                registry=registry,
+                profile_id="review",
+            )
+        registry.force_simulation(True, actor="operator", reason="incident")
+        with client(400) as rpc:
+            collect_shadow(
+                [request.model_copy(update={"observation_id": "deployment-second"})],
+                store=store,
+                rpc=rpc,
+                estimator=estimator,
+                registry=registry,
+                profile_id="review",
+            )
+        first = store.get("deployment-first")["plan"]
+        second = store.get("deployment-second")["plan"]
+        assert first["deployment_snapshot"]["force_simulation"] is False
+        assert second["deployment_evidence_status"] == "ineligible"
+        assert second["deployment_snapshot"]["force_simulation"] is True
+        assert second["deployment_snapshot"]["reason"] == "force_simulation"
+
+
+def test_missing_deployment_snapshot_is_explicit_and_old_plans_default_unavailable():
+    from cu_pilot.integration import DecisionPlan
+
+    plan = prepare_decision(unsigned_wire(builder()), context=context())
+    assert plan.deployment_evidence_status == "unavailable"
+    assert plan.deployment_snapshot is None
+    legacy = plan.model_dump(mode="json")
+    del legacy["deployment_evidence_status"], legacy["deployment_snapshot"]
+    assert DecisionPlan.model_validate(legacy).deployment_evidence_status == "unavailable"
+
+
+def test_bootstrap_shadow_captures_watcher_cache_without_authorizing_skip(tmp_path):
+    wire = unsigned_wire(builder())
+    ctx = context()
+    programs = bind_message(wire, current_slot=10).features.program_ids
+    registry = ProfileRegistry(tmp_path / "bootstrap-registry.sqlite")
+    reads = []
+
+    class Reader:
+        def get_multiple_accounts(self, addresses, **kwargs):
+            reads.append(list(addresses))
+            return {
+                "context": {"slot": 10},
+                "value": [
+                    {
+                        "owner": NATIVE_LOADER,
+                        "executable": True,
+                        "data": [base64.b64encode(b"fixture code").decode(), "base64"],
+                    }
+                    for _ in addresses
+                ],
+            }
+
+    refresh_deployments(
+        registry,
+        Reader(),
+        programs,
+        current_slot=10,
+        cluster_identity=ctx.cluster_identity,
+        runtime_identity=ctx.runtime_identity,
+    )
+    request = ShadowRequest(
+        observation_id="bootstrap",
+        wire_base64=wire,
+        context=ctx,
+        evidence_origin="synthetic",
+    )
+    with ObservationStore(tmp_path / "bootstrap-events.sqlite") as store:
+
+        def handler(_):
+            plan = store.get("bootstrap")["plan"]
+            assert plan["deployment_evidence_status"] == "observed_unreleased"
+            snapshot = plan["deployment_snapshot"]
+            assert snapshot["current_slot"] == "10"
+            assert snapshot["context"] == ctx.context
+            assert set(snapshot["program_ids"]) == set(programs)
+            assert len(snapshot["deployments"]) == len(set(programs))
+            assert snapshot["dependency_closure_verified"] is False
+            assert snapshot["release_authorized"] is False
+            assert snapshot["eligible"] is False
+            assert snapshot["problems"] == {}
+            assert plan["prediction"]["simulation_recommended"] is True
+            assert plan["eligibility_reason"] == "profile_not_released"
+            return httpx.Response(200, json=rpc_response())
+
+        with RpcClient("http://example.invalid", transport=httpx.MockTransport(handler)) as rpc:
+            collect_shadow([request], store=store, rpc=rpc, registry=registry)
+            assert rpc.call_count == 1
+        assert store.get("bootstrap")["result"]["status"] == "simulation_success"
+        assert len(reads) == 1  # Collection consults the cache only.
+        registry.watcher_failed()
+        later = prepare_decision(wire, context=ctx, registry=registry)
+        assert later.deployment_evidence_status == "ineligible"
+        assert later.deployment_snapshot["watcher_failed"] is True
+        assert store.get("bootstrap")["plan"]["deployment_snapshot"]["watcher_failed"] is False
+
+
+def test_bootstrap_snapshot_preserves_missing_expired_and_wrong_context_evidence(tmp_path):
+    wire = unsigned_wire(builder())
+    programs = bind_message(wire, current_slot=10).features.program_ids
+    registry = ProfileRegistry(tmp_path / "bootstrap-staleness.sqlite")
+    options = dict(
+        current_slot=10,
+        context="local",
+        cluster_identity="local-genesis",
+        runtime_identity="local-runtime",
+        now=1000,
+    )
+    missing = registry.cached_deployment_snapshot(programs, **options)
+    assert missing["status"] == "unavailable"
+    assert set(missing["problems"].values()) == {"deployment_evidence_missing"}
+    registry.record_deployments(
+        [
+            deployment_identity(
+                program,
+                {
+                    "owner": NATIVE_LOADER,
+                    "executable": True,
+                    "data": [base64.b64encode(b"fixture code").decode(), "base64"],
+                },
+                observed_slot=10,
+                checked_at=1000,
+                cluster_identity="local-genesis",
+                runtime_identity="local-runtime",
+            )
+            for program in programs
+        ]
+    )
+    assert (
+        registry.cached_deployment_snapshot(programs, **options)["status"] == "observed_unreleased"
+    )
+    cases = (
+        ({"now": 1061}, "deployment_time_stale_or_future"),
+        ({"now": 999}, "deployment_time_stale_or_future"),
+        ({"current_slot": 111}, "deployment_slot_stale_or_future"),
+        ({"current_slot": 9}, "deployment_slot_stale_or_future"),
+        ({"runtime_identity": "another-build"}, "deployment_context_mismatch"),
+        ({"cluster_identity": "another-genesis"}, "deployment_context_mismatch"),
+    )
+    for change, reason in cases:
+        snapshot = registry.cached_deployment_snapshot(programs, **(options | change))
+        assert snapshot["status"] == "ineligible"
+        assert set(snapshot["problems"].values()) == {reason}
+        assert snapshot["deployments"]  # Preserve stale evidence for the audit.
+        assert snapshot["eligible"] is False
+
+
+def test_shadow_control_audit_resumes_from_durable_result_without_new_simulation(
+    tmp_path, monkeypatch
+):
+    wire = unsigned_wire(builder())
+    ctx, estimator, registry = release_for_wire(
+        tmp_path / "controls.sqlite", wire, control_probability=1
+    )
+    request = ShadowRequest(
+        observation_id="interrupted-control",
+        wire_base64=wire,
+        context=ctx,
+        evidence_origin="synthetic",
+    )
+    original = registry.record_control
+    audit_calls = []
+
+    def interrupted(*args, **kwargs):
+        audit_calls.append(1)
+        if len(audit_calls) == 1:
+            raise RuntimeError("test interruption")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "record_control", interrupted)
+    with ObservationStore(tmp_path / "control-events.sqlite") as store, client(400) as rpc:
+        with pytest.raises(RuntimeError, match="interruption"):
+            collect_shadow(
+                [request],
+                store=store,
+                rpc=rpc,
+                estimator=estimator,
+                registry=registry,
+                profile_id="review",
+            )
+        assert store.get(request.observation_id)["phase"] == "complete"
+        assert rpc.call_count == 1
+        result = collect_shadow(
+            [request],
+            store=store,
+            rpc=rpc,
+            estimator=estimator,
+            registry=registry,
+            profile_id="review",
+        )
+        assert result["deduplicated"] == 1
+        assert rpc.call_count == 1
+        controls = registry.control_records()
+        assert len(controls) == 1 and controls[0]["outcome"] is not None
+
+
+def test_resume_normalizes_valid_request_defaults_without_rewriting_old_evidence(tmp_path):
+    request = ShadowRequest(
+        observation_id="legacy-defaults",
+        wire_base64=unsigned_wire(builder()),
+        context=context(),
+        evidence_origin="synthetic",
+    )
+    old_input = request.model_dump(mode="json")
+    del old_input["context"]["max_deployment_age_slots"]
+    del old_input["context"]["max_deployment_age_seconds"]
+    old_plan = prepare_decision(request.wire_base64, context=request.context).model_dump(
+        mode="json"
+    )
+    del old_plan["context"]["max_deployment_age_slots"]
+    del old_plan["context"]["max_deployment_age_seconds"]
+    del old_plan["deployment_snapshot"], old_plan["deployment_evidence_status"]
+    with ObservationStore(tmp_path / "legacy-defaults.sqlite") as store, client() as rpc:
+        store.ingest(request.observation_id, old_input)
+        store.freeze_plan(request.observation_id, old_plan)
+        assert collect_shadow([request], store=store, rpc=rpc)["completed"] == 1
+        assert store.get(request.observation_id)["input"] == old_input
+        assert store.get(request.observation_id)["plan"] == old_plan
+        assert collect_shadow([request], store=store, rpc=rpc)["deduplicated"] == 1
+        assert rpc.call_count == 1
+        changed = request.model_dump(mode="json")
+        changed["context"]["max_deployment_age_slots"] = 101
+        with pytest.raises(RecordConflict, match="input"):
+            store.ingest(request.observation_id, changed)
+        store.ingest("untyped", {"context": {}})
+        with pytest.raises(RecordConflict, match="input"):
+            store.ingest("untyped", {"context": {"max_deployment_age_slots": 100}})

@@ -4,7 +4,13 @@ import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileControlStore } from "../src/control-store.js";
-import { appendTransactionMessageInstruction, address } from "@solana/kit";
+import {
+  appendTransactionMessageInstruction,
+  address,
+  setTransactionMessageLifetimeUsingDurableNonce,
+  type Nonce,
+  type Instruction,
+} from "@solana/kit";
 import {
   buildTransferBatch,
   FIXTURE_PAYER,
@@ -25,6 +31,7 @@ import {
   MAX_CU,
 } from "../src/message.js";
 import { loadArtifact, roundedLimit } from "../src/policy.js";
+import type { ControlStore } from "../src/control-store.js";
 const message = buildTransferBatch({
   version: "legacy",
   payer: FIXTURE_PAYER,
@@ -310,4 +317,130 @@ test("duplicate budget is unresolved before RPC, and integer rounding never clam
   assert.equal(result.reason, "invalid_resource_configuration");
   assert.equal(fake.calls(), 0);
   assert.ok(roundedLimit(MAX_CU, 1000, 100) > MAX_CU);
+});
+
+test("asynchronous caller mutation cannot change the final instruction bytes", async () => {
+  const instructions: readonly Instruction[] = message.instructions;
+  const mutable = {
+    ...message,
+    instructions: instructions.map((ix) => ({
+      ...ix,
+      data: ix.data ? new Uint8Array(ix.data) : undefined,
+    })),
+  } as typeof message;
+  const original = bindMessage(mutable).transaction.instructions[0]!.data_hex;
+  const fake = {
+    simulateTransaction: () => ({
+      send: async () => {
+        (mutable.instructions[0]!.data as Uint8Array)[4] = 250;
+        await Promise.resolve();
+        return measured();
+      },
+    }),
+  } as unknown as EstimateOptions["rpc"];
+  const result = await estimateResources(mutable, { ...context, rpc: fake });
+  assert.equal(result.status, "simulation");
+  assert.equal(result.final!.transaction.instructions[0]!.data_hex, original);
+  assert.notEqual(
+    bindMessage(mutable).transaction.instructions[0]!.data_hex,
+    original,
+  );
+  assert.deepEqual(
+    result.unsignedMessage!.lifetimeConstraint,
+    message.lifetimeConstraint,
+  );
+});
+
+test("asynchronous audit persistence rechecks expiry and quarantine before acceptance", async () => {
+  for (const scenario of ["expiry", "quarantine"] as const) {
+    const { artifact, release } = setup();
+    let suspended = false;
+    const store: ControlStore = {
+      isSuspended: () => suspended,
+      recordOutcome: () => {},
+      recordDecision: async (decision) => {
+        // Mutating the sink's copy must not mutate the pending result.
+        decision.prediction!.compute_unit_limit = 1;
+        if (scenario === "expiry") release.exported_at -= 120;
+        else suspended = true;
+        await Promise.resolve();
+      },
+    };
+    const fake = rpc([measured()]);
+    const result = await estimateResources(message, {
+      ...context,
+      artifact,
+      release,
+      controlStore: store,
+      rpc: fake.client,
+    });
+    assert.equal(result.status, "simulation");
+    assert.equal(fake.calls(), 1);
+    assert.notEqual(result.prediction!.compute_unit_limit, 1);
+    assert.equal(
+      result.reason,
+      scenario === "expiry"
+        ? "release_changed_during_preparation"
+        : "profile_quarantined",
+    );
+  }
+});
+
+test("simulation context requires an exact SDK u64 slot", async () => {
+  for (const invalid of [true, 401, "401", -1n, 1n << 64n]) {
+    const fake = rpc([{ ...measured(), context: { slot: invalid } }]);
+    const result = await estimateResources(message, {
+      ...context,
+      currentSlot: 0n,
+      rpc: fake.client,
+    });
+    assert.equal(result.status, "unresolved");
+    assert.equal(result.reason, "invalid_simulation_context");
+    assert.equal(result.limits, null);
+    assert.equal(fake.calls(), 1);
+  }
+});
+
+test("resource rebuilding preserves durable nonce instruction ordering and lifetime", async () => {
+  for (const version of ["legacy", 0, 1] as const) {
+    const base = buildTransferBatch({
+      version,
+      payer: FIXTURE_PAYER,
+      destinations: [FIXTURE_RECIPIENT],
+      amounts: [1n],
+      blockhash: "11111111111111111111111111111111",
+      lastValidBlockHeight: 999n,
+    });
+    const durable = setTransactionMessageLifetimeUsingDurableNonce(
+      {
+        nonce: "11111111111111111111111111111111" as Nonce,
+        nonceAccountAddress: address("11111111111111111111111111111114"),
+        nonceAuthorityAddress: FIXTURE_PAYER,
+      },
+      base,
+    );
+    const original = bindMessage(durable),
+      fake = rpc([measured()]);
+    const result = await estimateResources(durable, {
+      ...context,
+      rpc: fake.client,
+    });
+    assert.equal(result.status, "simulation");
+    assert.deepEqual(
+      result.unsignedMessage!.lifetimeConstraint,
+      durable.lifetimeConstraint,
+    );
+    assert.deepEqual(
+      result.final!.transaction.instructions[0],
+      original.transaction.instructions[0],
+    );
+    assert.equal(
+      result.final!.transaction.instructions[0]!.data_hex,
+      "04000000",
+    );
+    assert.deepEqual(
+      result.final!.transaction.instructions.map((ix) => ix.program_id),
+      original.transaction.instructions.map((ix) => ix.program_id),
+    );
+  }
 });

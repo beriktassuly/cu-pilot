@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, StrictBool, StrictInt
 
@@ -42,6 +42,8 @@ class EstimationContext(StrictModel):
     budget_independent: StrictBool = False
     commitment: Literal["processed", "confirmed", "finalized"] = "confirmed"
     max_lookup_age_slots: StrictInt = Field(default=32, ge=0)
+    max_deployment_age_slots: StrictInt = Field(default=100, ge=0)
+    max_deployment_age_seconds: float = Field(default=60, gt=0, le=3600, allow_inf_nan=False)
 
 
 class DecisionPlan(StrictModel):
@@ -63,6 +65,10 @@ class DecisionPlan(StrictModel):
     preparation_ms: float = Field(ge=0)
     state_reads: int = Field(default=0, ge=0)
     lookup_evidence: tuple[LookupEvidence, ...] = ()
+    deployment_evidence_status: Literal[
+        "unavailable", "observed_unreleased", "eligible", "ineligible"
+    ] = "unavailable"
+    deployment_snapshot: dict[str, Any] | None = None
     control_selected: bool = False
     control_probability: float = 0
 
@@ -129,6 +135,14 @@ def prepare_decision(
                     ),
                 )
                 state_reads += 1
+                # A successful minContextSlot read can legitimately observe a newer
+                # bank. Advance the decision context to that actual pre-execution
+                # evidence; do not reject it as a future caller-supplied snapshot.
+                context = context.model_copy(
+                    update={
+                        "current_slot": max(context.current_slot, tables[key].slot),
+                    }
+                )
     bound = bind_message(
         wire_base64,
         current_slot=context.current_slot,
@@ -149,11 +163,11 @@ def prepare_decision(
         digest = artifact_digest(estimator)
     reason = prediction.reason
     revision = None
-    if not context.budget_independent:
-        reason = "budget_sensitive_or_unreviewed_workload"
-    elif registry is None or profile_id is None:
-        reason = "profile_not_released"
-    else:
+    deployment_snapshot = None
+    deployment_status: Literal["unavailable", "observed_unreleased", "eligible", "ineligible"] = (
+        "unavailable"
+    )
+    if registry is not None and profile_id is not None:
         eligibility = registry.check(
             profile_id,
             current_slot=context.current_slot,
@@ -164,10 +178,31 @@ def prepare_decision(
             program_ids=bound.features.program_ids,
         )
         revision = eligibility.revision
+        deployment_snapshot = eligibility.evidence_snapshot
+        if deployment_snapshot is not None:
+            deployment_status = "eligible" if eligibility.eligible else "ineligible"
         if not eligibility.eligible:
             reason = eligibility.reason
         elif eligibility.artifact_sha256 != digest:
             reason = "active_artifact_mismatch"
+    else:
+        reason = "profile_not_released"
+    if registry is not None and deployment_snapshot is None:
+        deployment_snapshot = registry.cached_deployment_snapshot(
+            bound.features.program_ids,
+            current_slot=context.current_slot,
+            context=context.context,
+            cluster_identity=context.cluster_identity,
+            runtime_identity=context.runtime_identity,
+            max_age_slots=context.max_deployment_age_slots,
+            max_age_seconds=context.max_deployment_age_seconds,
+        )
+        if deployment_snapshot["status"] == "observed_unreleased":
+            deployment_status = "observed_unreleased"
+        elif deployment_snapshot["status"] == "ineligible":
+            deployment_status = "ineligible"
+    if not context.budget_independent:
+        reason = "budget_sensitive_or_unreviewed_workload"
     selected = False
     probability = 0.0
     if (
@@ -207,6 +242,8 @@ def prepare_decision(
         preparation_ms=(time.perf_counter() - started) * 1000,
         state_reads=state_reads,
         lookup_evidence=tuple(tables.values()),
+        deployment_evidence_status=deployment_status,
+        deployment_snapshot=deployment_snapshot,
         control_selected=selected,
         control_probability=probability,
     )
@@ -437,7 +474,7 @@ def estimate_resources(
         shadow=shadow,
         force_simulation=force_simulation,
         registry=registry,
-        current_slot=context.current_slot,
+        current_slot=plan.context.current_slot,
     )
     if registry is not None and plan.control_selected:
         sim = decision.simulation
@@ -446,7 +483,7 @@ def estimate_resources(
             success=sim is not None,
             compute_units=sim.units_consumed if sim else None,
             loaded_accounts_bytes=sim.loaded_accounts_bytes if sim else None,
-            current_slot=sim.slot if sim else context.current_slot,
+            current_slot=sim.slot if sim else plan.context.current_slot,
             elapsed_ms=sim.elapsed_ms if sim else decision.full_preparation_ms,
         )
     return decision.model_copy(

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cu-pilot"
 version = "0.2.0"
-description = "Conservative Solana compute estimates with explicit simulation fallback"
+description = "Bound Solana compute and account-data estimates with simulation fallback"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.10,<3",

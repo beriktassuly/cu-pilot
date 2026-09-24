@@ -15,6 +15,7 @@ import {
   type BuilderMessage,
   type LookupEvidence,
   type BoundMessage,
+  decodeBuilder,
 } from "./message.js";
 import {
   loadArtifact,
@@ -179,6 +180,12 @@ export function releaseRisk(
     )
       return "deployment_changed";
     if (
+      d.deployment_slot !== null &&
+      (artifact.calibration_min_slot === null ||
+        slot(d.deployment_slot) >= slot(artifact.calibration_min_slot))
+    )
+      return "deployment_not_covered_by_calibration";
+    if (
       !Number.isFinite(d.checked_at) ||
       d.checked_at > now ||
       now - d.checked_at > m.max_deployment_age_seconds ||
@@ -221,6 +228,7 @@ export type ControlObservation = {
   decisionMessageIdentity: string;
   profileId: string | null;
   profileRevision: number | null;
+  artifactDigest: string | null;
   selectedBeforeOutcome: true;
   probability: number;
   prediction: Prediction;
@@ -235,6 +243,7 @@ export type ResourceDecision = {
   profileId: string | null;
   profileRevision: number | null;
   modelVersion: string | null;
+  artifactDigest: string | null;
   context: RuntimeContext;
   original: BoundMessage | null;
   prepared: BoundMessage | null;
@@ -309,7 +318,21 @@ async function simulate(
         })
         .send({ abortSignal: signal });
       const value = response.value;
-      const observed = BigInt(response.context.slot);
+      const observed = response.context.slot;
+      if (
+        typeof observed !== "bigint" ||
+        observed < 0n ||
+        observed >= 1n << 64n
+      )
+        return {
+          status: "failed",
+          reason: "invalid_simulation_context",
+          slot: null,
+          computeUnits: null,
+          loadedAccountsBytes: null,
+          elapsedMs: performance.now() - start,
+          attempts: attempt,
+        };
       const base = {
         slot: observed.toString(),
         elapsedMs: performance.now() - start,
@@ -403,6 +426,7 @@ export async function estimateResources(
   options: EstimateOptions,
 ): Promise<ResourceDecision> {
   const start = performance.now();
+  const liveRelease = options.release;
   const d: ResourceDecision = {
     observationId: randomUUID(),
     status: "unresolved",
@@ -411,6 +435,7 @@ export async function estimateResources(
     profileId: options.release?.manifest.profile_id ?? null,
     profileRevision: options.release?.manifest.revision ?? null,
     modelVersion: options.artifact?.artifact_version ?? null,
+    artifactDigest: options.release?.manifest.artifact_sha256 ?? null,
     context: {
       context: options.context,
       cluster: options.cluster,
@@ -432,6 +457,12 @@ export async function estimateResources(
     preflightPolicy: "caller-owned",
   };
   try {
+    // Snapshot mutable evidence and caller options before any asynchronous work.
+    options = {
+      ...options,
+      lookup: options.lookup ? structuredClone(options.lookup) : undefined,
+      release: options.release ? structuredClone(options.release) : undefined,
+    };
     if (
       typeof options.currentSlot !== "bigint" ||
       options.currentSlot < 0n ||
@@ -442,13 +473,29 @@ export async function estimateResources(
     if (
       d.original.features.lookup_table_count &&
       (!options.lookup ||
+        typeof options.lookup.checkedSlot !== "bigint" ||
+        options.lookup.checkedSlot < 0n ||
+        options.lookup.checkedSlot >= 2n ** 64n ||
+        (options.maxLookupAgeSlots !== undefined &&
+          (typeof options.maxLookupAgeSlots !== "bigint" ||
+            options.maxLookupAgeSlots < 0n)) ||
         options.lookup.cluster !== options.cluster ||
         options.lookup.checkedSlot > options.currentSlot ||
         options.currentSlot - options.lookup.checkedSlot >
-          (options.maxLookupAgeSlots ?? 150n))
+          (options.maxLookupAgeSlots ?? 32n))
     )
       throw new Error("stale_lookup_evidence");
-    const prepared = prepareResources(message);
+    const originalSnapshot = decodeBuilder(
+      Buffer.from(d.original.wireBase64, "base64"),
+      options.lookup,
+    );
+    // Lifetime metadata is not encoded on wire; preserve the caller's original
+    // last-valid height/nonce contract without retaining a mutable reference.
+    const snapshot = {
+      ...originalSnapshot,
+      lifetimeConstraint: structuredClone(message.lifetimeConstraint),
+    } as BuilderMessage;
+    const prepared = prepareResources(snapshot);
     d.prepared = bindMessage(prepared, options.lookup);
     let reason = "missing_artifact";
     let artifact: ResourceArtifact | undefined;
@@ -468,12 +515,16 @@ export async function estimateResources(
       reason = "control_store_required";
     if (
       options.release &&
-      options.controlStore?.isSuspended(options.release.manifest.profile_id)
+      options.controlStore?.isSuspended(
+        options.release.manifest.profile_id,
+        options.release.manifest.revision,
+        options.release.manifest.artifact_sha256,
+      )
     )
       reason = "profile_quarantined";
     if (options.budgetIndependent !== true)
       reason = "budget_sensitive_workload";
-    const eligible =
+    let eligible =
       reason === "calibrated_resources" && !options.forceSimulation;
     d.controlProbability = eligible
       ? (options.release?.manifest.control_probability ?? 0)
@@ -489,7 +540,23 @@ export async function estimateResources(
       throw new Error("invalid_control_draw");
     d.controlSelected = eligible && draw < d.controlProbability;
     d.reason = reason;
-    if (eligible) await options.controlStore!.recordDecision(d);
+    if (eligible) {
+      await options.controlStore!.recordDecision(structuredClone(d));
+      const changed = canonical(liveRelease) !== canonical(options.release);
+      const risk = changed
+        ? "release_changed_during_preparation"
+        : releaseRisk(options.release, artifact!, d.prepared, options);
+      const suspended = options.controlStore!.isSuspended(
+        d.profileId!,
+        d.profileRevision!,
+        d.artifactDigest!,
+      );
+      if (risk || suspended) {
+        eligible = false;
+        reason = suspended ? "profile_quarantined" : risk!;
+        d.reason = reason;
+      }
+    }
     if (eligible && !options.shadow && !d.controlSelected) {
       d.status = "prediction";
       d.observationSlot = options.currentSlot.toString();
@@ -509,6 +576,7 @@ export async function estimateResources(
           decisionMessageIdentity: d.prepared.messageIdentity,
           profileId: d.profileId,
           profileRevision: d.profileRevision,
+          artifactDigest: d.artifactDigest,
           selectedBeforeOutcome: true,
           probability: d.controlProbability,
           prediction: d.prediction,
@@ -519,8 +587,8 @@ export async function estimateResources(
               d.simulation.loadedAccountsBytes! >
                 d.prediction.loaded_accounts_data_size_limit!),
         };
-        await options.controlStore!.recordOutcome(event);
-        await options.onControl?.(event);
+        await options.controlStore!.recordOutcome(structuredClone(event));
+        await options.onControl?.(structuredClone(event));
       }
       if (d.simulation.status !== "success") {
         d.reason = d.simulation.reason;
@@ -546,7 +614,13 @@ export async function estimateResources(
         d.limits = { computeUnits: MAX_CU, loadedAccountsBytes: MAX_DATA };
     }
     d.unsignedMessage = prepareResources(
-      prepared,
+      {
+        ...decodeBuilder(
+          Buffer.from(d.prepared.wireBase64, "base64"),
+          options.lookup,
+        ),
+        lifetimeConstraint: snapshot.lifetimeConstraint,
+      } as BuilderMessage,
       d.limits!.computeUnits,
       d.limits!.loadedAccountsBytes,
     );

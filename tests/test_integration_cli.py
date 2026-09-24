@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from cu_pilot.binding import unsigned_wire
 from cu_pilot.cli import app
-from cu_pilot.shadow import ShadowRequest
+from cu_pilot.shadow import ObservationStore, ShadowRequest
 
 
 def test_shadow_cli_replay_resume_and_export(tmp_path):
@@ -23,9 +23,16 @@ def test_shadow_cli_replay_resume_and_export(tmp_path):
     path.write_text(request.model_dump_json() + "\n")
     db = tmp_path / "events.sqlite"
     runner = CliRunner()
-    result = runner.invoke(app, ["shadow", str(path), str(db), "--replay"])
+    result = runner.invoke(
+        app,
+        ["shadow", str(path), str(db), "--replay", "--registry", str(tmp_path / "profiles.sqlite")],
+    )
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["completed"] == 1
+    with ObservationStore(db) as store:
+        plan = store.get(request.observation_id)["plan"]
+        assert plan["deployment_evidence_status"] == "unavailable"
+        assert plan["deployment_snapshot"]["release_authorized"] is False
     result = runner.invoke(app, ["shadow", str(path), str(db), "--replay"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["deduplicated"] == 1

@@ -717,3 +717,48 @@ def test_late_control_suspends_active_artifact_alias(
     )
     assert registry.check("batch", **ENV).reason == "artifact_quarantined"
     assert registry.check("batch", **ENV).reason == "profile_suspended"
+
+
+@pytest.mark.parametrize("deployment_slot", [280, 450])
+def test_old_calibration_cannot_be_rebound_to_new_deployment(
+    tmp_path: Path, artifact: str, deployment_slot: int
+) -> None:
+    registry = ProfileRegistry(tmp_path / "profiles.sqlite")
+    current = evidence().model_copy(
+        update=dict(
+            owner=UPGRADEABLE_LOADER,
+            deployment_slot=deployment_slot,
+            observed_slot=500,
+        )
+    )
+    registry.record_deployments([current])
+    registry.register(manifest(artifact), artifact, actor="operator")
+    registry.transition("batch", 1, "shadow", actor="operator", reason="review")
+    with pytest.raises(ValueError, match="deployment_not_covered_by_calibration"):
+        registry.activate(
+            "batch", 1, actor="operator", reason="invalid rebind", **{**ENV, "current_slot": 500}
+        )
+
+
+def test_deployment_before_calibration_and_atomic_decision_snapshot(
+    tmp_path: Path, artifact: str
+) -> None:
+    registry = ProfileRegistry(tmp_path / "profiles.sqlite")
+    deployed = evidence().model_copy(update=dict(owner=UPGRADEABLE_LOADER, deployment_slot=279))
+    registry.record_deployments([deployed])
+    registry.register(manifest(artifact), artifact, actor="operator")
+    registry.transition("batch", 1, "shadow", actor="operator", reason="review")
+    registry.activate("batch", 1, actor="operator", reason="calibrated deployment", **ENV)
+    checked = registry.check("batch", **ENV)
+    assert checked.eligible and checked.evidence_snapshot is not None
+    snapshot = checked.evidence_snapshot
+    assert snapshot["eligible"] and snapshot["state"] == "active"
+    assert snapshot["artifact_calibration_min_slot"] == "280"
+    assert snapshot["deployments"][0]["deployment_slot"] == "279"
+    assert snapshot["manifest"]["artifact_sha256"] == checked.artifact_sha256
+    registry.record_deployments([deployed.model_copy(update={"fingerprint": "1" * 64})])
+    rejected = registry.check("batch", **ENV)
+    assert rejected.evidence_snapshot is not None
+    assert rejected.evidence_snapshot["state"] == "suspended"
+    assert rejected.evidence_snapshot["quarantine"] == "deployment_changed"
+    assert snapshot["state"] == "active"  # Previously returned evidence is not overwritten.

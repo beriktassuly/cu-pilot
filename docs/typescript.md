@@ -14,7 +14,8 @@ npm run build
 
 Public interfaces exported by `src/index.ts` are `buildTransferBatch`,
 `estimateResources`, `bindMessage`, `verifyBoundMessage`, `decodeBuilder`,
-`loadArtifact`, `predictResources`, and `FileControlStore`. The builder example is
+`loadArtifact`, `predictResources`, `resolveLookupTables`, and `FileControlStore`.
+The builder example is
 an ordered batch of System transfers, not an external customer workload.
 
 ```ts
@@ -47,13 +48,26 @@ Every changed compiled message receives a new `message-v1` identity. `shape-v1` 
 only a grouping identifier. This adapter permits no implicit blockhash refresh.
 Rebind after any change. All prepared output is unsigned.
 
+For v0, use `resolveLookupTables(rpc, tableAddresses, {currentSlot, cluster})` before
+compressing/binding the builder. It checks the actual RPC account owner, layout,
+deactivation and same-slot extension visibility with the official SDK decoder.
+Advance the application's current-slot view to the returned `checkedSlot` when
+that fresh read is newer. The compiled builder's lookup addresses must match the
+verified index resolution. Cached evidence remains subject to freshness checks;
+arbitrary table mappings are a caller trust boundary, not verified chain evidence.
+
 Skipping requires active, current deployment evidence, an allowlisted workload,
 an explicit budget-independent contract and a durable control store. Budget-sensitive
 workloads simulate and retain maximum resource budgets. `FileControlStore` writes and
 fsyncs the selection before simulation, records outcomes separately, and quarantines
 resource excess or repeated failed controls across restarts. It is a single-process
-journal; corrupted/torn records fail closed. Recovery requires operator review and
+journal; multiple instances within that process synchronously replay new records
+before checks and writes. Each check verifies the existing journal prefix, so its
+local read/hash cost grows with retained history. Multiple writer processes are
+unsupported. Corrupted/torn records and changed prefixes fail closed. Recovery requires operator review and
 requalification; deleting a journal to clear quarantine is not a recovery procedure.
+See [typescript-recovery.md](typescript-recovery.md) for the explicit append-only
+requalification operation and old-revision quarantine behavior.
 
 Fees and slots use `bigint` in memory and canonical decimal strings in exported JSON.
 Resource counts use safe integers. Legacy/v0 priority prices remain micro-lamports
@@ -61,8 +75,7 @@ per CU; v1 absolute priority lamports remain unchanged when resource limits chan
 v1 skipping stays disabled by default. Fallback uses 10% headroom, rounds CU upward
 to 100 and data to 32,768 bytes, and rejects required limits above protocol caps.
 Artifact policy controls prediction margins/rounding, independently of fallback.
-Successful simulation describes one
-bank state, not guaranteed later execution success.
+Successful simulation describes one bank state, not guaranteed later execution success.
 
 Default tests are offline. Their RPC doubles test failure handling, not Solana
 execution. See [local-runtime.md](local-runtime.md) for the separately invoked real

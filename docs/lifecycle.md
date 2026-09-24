@@ -71,6 +71,13 @@ For loader-v3, both batches must report exactly the same slot. A slot change bet
 batches produces an explicit failed refresh; it does not certify a mixed snapshot.
 An observation at or before the deployment slot is rejected because deployment
 visibility can lag. This conservative policy can require retrying a refresh.
+Activation, rollback and inference also require each tracked deployment slot to be
+strictly earlier than the artifact's frozen calibration start. An old artifact
+cannot be rebound to a newer deployment merely by creating a fresh manifest. The
+current artifact does not record the earliest fitting slot: fitting may predate
+deployment, but all validating calibration must follow it. Immutable/native loaders
+without a deployment slot still rely on the explicit context and runtime boundary;
+a code fingerprint alone cannot date their historical calibration labels.
 
 `watch-once` verifies `getGenesisHash` and `getVersion` before fetching accounts.
 The runtime string is `rpc:<solana-core>:feature-set:<feature-set>`. **The RPC build
@@ -122,6 +129,10 @@ compare that model's digest with `eligibility.artifact_sha256` and retain the ch
 revision. A later release must not relabel an earlier decision. As with simulation,
 these checks cannot guarantee that chain state stays unchanged between preparation
 and execution. Signing and sending remain caller responsibilities.
+`Eligibility.evidence_snapshot` captures the checked manifest, deployment identities,
+watcher/emergency flags, check time and resulting profile state in the same SQLite
+transaction as the decision. Persist that snapshot with the decision; an independently
+exported later snapshot is not evidence of what the earlier decision checked.
 
 `export_snapshot(profile_id)` emits `cu-pilot-release-snapshot-v1` for TypeScript.
 It contains the exact `artifact_canonical_json` hash preimage, manifest, current
@@ -201,6 +212,8 @@ uv run pytest tests/test_lifecycle.py -q
 Those tests use handcrafted account-state fixtures and exercise the state machine,
 loader metadata parser, upgrade detection, RPC failure redaction, reconciliation
 hooks, atomic snapshots, rollback and concurrency. They are not evidence of an
-actual program upgrade running inside Solana. The separate local integration suite
-must establish supported runtime behavior; untested loader/runtime combinations
-remain unsupported.
+actual program upgrade running inside Solana. The separately invoked
+[program-upgrade integration](program-upgrade.md) executes a signed loader-v3
+Upgrade locally, then verifies suspension and actual fallback. It reloads the same
+ELF under default Surfpool features; untested loader/runtime combinations remain
+unsupported.

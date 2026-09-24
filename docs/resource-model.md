@@ -145,6 +145,17 @@ trace lists report null latency percentiles, not invented measurements. Traces
 must belong to the frozen test partition, and mixed evidence modes are rejected.
 There is no claim about improved landing, network fees or production reliability.
 
+Each proposed policy also reports configured priority fees by transaction version,
+using its final CU limit and the original fee setting. Legacy/v0 use upward lamport
+rounding of micro-lamports per CU times the requested CU limit, with the runtime's
+uint64 saturation; v1 retains its absolute lamport fee. Totals are exact decimal
+strings, including fees above JavaScript's safe integer range. These are calculated
+configuration values, not observed charged total fees or savings. Fallback fees
+remain unscored until the final configuration is known; base fees and precompile
+signature charges are not inferred from the ordinary signature count. Sources:
+[official fee semantics](https://solana.com/docs/core/fees/fee-structure) and
+[Agave rounding and saturation](https://github.com/anza-xyz/agave/blob/v3.1.8/compute-budget/src/compute_budget_limits.rs).
+
 `ObservationStore.preparation_traces()` exports measured collector spans around
 input ingestion, frozen-plan durability, preparation, RPC, and the atomic result
 and checkpoint commit. The final telemetry write occurs afterward and is excluded

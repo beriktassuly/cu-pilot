@@ -343,7 +343,7 @@ class RpcClient:
 
 
 def _integer(value: Any, field: str) -> int:
-    if type(value) is not int or value < 0:
+    if type(value) is not int or not 0 <= value < 2**64:
         raise RpcError(f"RPC returned an invalid or missing {field}")
     return int(value)
 

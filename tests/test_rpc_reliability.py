@@ -50,7 +50,7 @@ def test_only_retryable_rpc_errors_retry(code, expected):
     assert len(calls) == expected
 
 
-@pytest.mark.parametrize("slot", [True, 1.0, "1", -1])
+@pytest.mark.parametrize("slot", [True, 1.0, "1", -1, 2**64])
 def test_invalid_slot_reads_rejected(slot):
     with RpcClient(
         "http://unused.invalid",

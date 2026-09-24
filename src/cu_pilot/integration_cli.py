@@ -92,13 +92,25 @@ def shadow(
     inputs: Path,
     database: Path,
     model: Path | None = None,
+    registry: Path | None = None,
+    profile: str | None = None,
     replay: bool = False,
     stream: str = "default",
     max_records: Annotated[int, typer.Option(min=1, max=100000)] = 1000,
     requests_per_second: Annotated[float, typer.Option(min=0.01)] = 10,
 ) -> None:
     """Persist prediction first and simulate every input; --replay uses recorded responses."""
+    if profile is not None and registry is None:
+        raise typer.BadParameter("--profile requires --registry")
     estimator = ResourceEstimator.load(model) if model else None
+    profiles = ProfileRegistry(registry) if registry is not None else None
+    if profiles is not None and profile is not None and estimator is None:
+        try:
+            _, estimator = profiles.load_active(profile)
+        except ValueError:
+            # Collection still records an inactive or unavailable release check.
+            # An explicit --model can supply its statistical shadow prediction.
+            pass
     current: list[ShadowRequest] = []
 
     def requests() -> Iterator[ShadowRequest]:
@@ -141,6 +153,8 @@ def shadow(
             store=store,
             rpc=rpc,
             estimator=estimator,
+            registry=profiles,
+            profile_id=profile,
             stream=stream,
             max_records=max_records,
         )
