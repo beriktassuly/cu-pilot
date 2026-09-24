@@ -1,5 +1,10 @@
 # Transaction features and pattern identity
 
+`shape-v1` remains the cross-language grouping contract. New integration decisions additionally
+bind to a complete SDK message using `message-v1:<sha256>`; see [binding rules](integration.md).
+Real Kit legacy/v0/v1 fixtures under `tests/fixtures/kit` now supplement the original synthetic
+JSON fixtures. A grouping pattern is never an exact transaction identity.
+
 `shape-v1` groups pre-execution message structure. A matching pattern means the
 messages look alike; account state and program behavior may still change their
 compute needs. Calibrated policy checks and simulation fallback remain necessary.

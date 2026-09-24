@@ -1,0 +1,342 @@
+"""Adversarial offline boundary tests; RPC fixtures are not runtime evidence."""
+
+import base64
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+from solders.hash import Hash
+from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
+from test_binding import builder, context, rpc_response
+
+from cu_pilot.binding import bind_message, decode_wire, replace_resources, unsigned_wire
+from cu_pilot.integration import estimate_resources, execute_decision, prepare_decision
+from cu_pilot.lifecycle import (
+    NATIVE_LOADER,
+    ProfileManifest,
+    ProfileRegistry,
+    artifact_digest,
+    deployment_identity,
+)
+from cu_pilot.resource_evaluation import preparation_report
+from cu_pilot.resources import ResourceEstimator
+from cu_pilot.rpc import RpcClient
+from cu_pilot.schemas import Observation, ResourceLabel
+from cu_pilot.shadow import ObservationStore, RecordConflict, ShadowRequest, collect_shadow
+
+
+def client(slot=10):
+    return RpcClient(
+        "http://example.invalid",
+        requests_per_second=10000,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=rpc_response(slot=slot))),
+    )
+
+
+def release_for_wire(path: Path, wire: str):
+    ctx = context().model_copy(update={"current_slot": 400})
+    features = bind_message(wire, current_slot=400).features
+    # Simulated-source contract fixture, never exported or represented as evidence
+    # of model accuracy. This test exercises explicit operator release mechanics.
+    estimator = ResourceEstimator.fit(
+        [
+            Observation(
+                record_id=f"fixture-{i}",
+                slot=i,
+                context=ctx.context,
+                source="simulation",
+                features=features,
+                label=ResourceLabel(success=True, compute_units=600, loaded_accounts_bytes=128),
+            )
+            for i in range(400)
+        ]
+    )
+    programs = list(dict.fromkeys(features.program_ids))
+    evidence = [
+        deployment_identity(
+            p,
+            {
+                "owner": NATIVE_LOADER,
+                "executable": True,
+                "data": [base64.b64encode(b"offline-fixture").decode(), "base64"],
+            },
+            observed_slot=400,
+            checked_at=time.time(),
+            cluster_identity=ctx.cluster_identity,
+            runtime_identity=ctx.runtime_identity,
+        )
+        for p in programs
+    ]
+    payload = estimator.model.model_dump_json()
+    manifest = ProfileManifest(
+        profile_id="review",
+        revision=1,
+        artifact_sha256=artifact_digest(payload),
+        context=ctx.context,
+        cluster_identity=ctx.cluster_identity,
+        runtime_identity=ctx.runtime_identity,
+        workload_allowlist=(ctx.workload,),
+        deployment_bindings={e.program_id: e.fingerprint for e in evidence},
+        dependencies={p: () for p in programs},
+        dependency_closure_verified=True,
+        budget_independent=True,
+        evidence_min_slot=0,
+        evidence_max_slot=399,
+        provenance="simulation",
+        control_probability=0,
+    )
+    registry = ProfileRegistry(path)
+    registry.register(manifest, payload, actor="test-operator")
+    registry.transition("review", 1, "shadow", actor="test-operator", reason="fixture")
+    registry.record_deployments(evidence)
+    registry.activate(
+        "review",
+        1,
+        actor="test-operator",
+        reason="fixture",
+        current_slot=400,
+        context=ctx.context,
+        cluster_identity=ctx.cluster_identity,
+        runtime_identity=ctx.runtime_identity,
+        workload=ctx.workload,
+        program_ids=programs,
+    )
+    return ctx, estimator, registry
+
+
+@pytest.mark.parametrize("change", ["bytes", "features", "budget", "identity", "nonce"])
+def test_persisted_plan_cannot_substitute_message_or_feature_input(change):
+    plan = prepare_decision(unsigned_wire(builder()), context=context())
+    if change == "bytes":
+        plan = plan.model_copy(
+            update={
+                "prepared_wire_base64": bind_message(
+                    unsigned_wire(builder(amount=999)), current_slot=10
+                ).wire_base64
+            }
+        )
+    elif change == "features":
+        plan = plan.model_copy(
+            update={"features": plan.features.model_copy(update={"pattern_id": "unrelated"})}
+        )
+    elif change == "budget":
+        changed = replace_resources(decode_wire(plan.prepared_wire_base64).message, 1, 1)
+        plan = plan.model_copy(update={"prepared_wire_base64": unsigned_wire(changed)})
+    elif change == "identity":
+        plan = plan.model_copy(update={"prepared_identity": "made-up"})
+    else:
+        plan = plan.model_copy(update={"durable_nonce": True})
+    with client() as rpc:
+        result = execute_decision(plan, rpc=rpc, shadow=True)
+        assert rpc.call_count == 0
+    assert result.status == "unresolved"
+    assert result.reason == "invalid_bound_plan"
+
+
+def test_skip_requires_fresh_check_and_prediction_matches_active_artifact(tmp_path):
+    wire = unsigned_wire(builder())
+    ctx, estimator, registry = release_for_wire(tmp_path / "profiles.sqlite", wire)
+    with client(400) as rpc:
+        result = estimate_resources(
+            wire, rpc=rpc, context=ctx, estimator=estimator, registry=registry, profile_id="review"
+        )
+        assert result.status == "accepted_prediction"
+        assert result.compute_unit_limit == 700
+        assert rpc.call_count == 0
+        plan = result.plan
+        assert plan is not None
+        stale = execute_decision(plan, rpc=rpc, registry=registry)
+        assert stale.status == "simulation_success"
+        assert stale.reason == "fresh_profile_check_required"
+        forged = plan.model_copy(
+            update={"prediction": plan.prediction.model_copy(update={"compute_unit_limit": 1})}
+        )
+        rejected = execute_decision(forged, rpc=rpc, registry=registry, current_slot=400)
+        assert rejected.status == "simulation_success"
+        assert rejected.reason == "prediction_artifact_mismatch"
+
+
+def test_reconciliation_finality_retries_and_training_origin(tmp_path):
+    payer = Keypair()
+    wire = unsigned_wire(builder(payer=payer.pubkey()))
+    request = ShadowRequest(
+        observation_id="retry",
+        wire_base64=wire,
+        context=context(),
+        evidence_origin="synthetic",
+        collection_method="offline-replay",
+    )
+    with ObservationStore(tmp_path / "shadow.sqlite") as store, client() as rpc:
+        collect_shadow([request], store=store, rpc=rpc)
+        message = decode_wire(store.get("retry")["result"]["unsigned_transaction_base64"]).message
+        first = base64.b64encode(bytes(VersionedTransaction(message, [payer]))).decode()
+        sig1 = store.attach_signature("retry", first, commitment="confirmed")
+        failed = {
+            "slot": 11,
+            "transaction": [first, "base64"],
+            "meta": {"err": {"failed": True}, "computeUnitsConsumed": 10},
+        }
+        assert store.reconcile(sig1, failed, commitment="finalized") == "finalized"
+        store.attach_signature("retry", first, commitment="confirmed")
+        assert store.get("retry")["outcome"] == "finalized"
+        with pytest.raises(RecordConflict):
+            store.attach_signature("retry", first, commitment="finalized")
+        limits = store.get("retry")["result"]
+        refreshed = replace_resources(
+            message,
+            limits["compute_unit_limit"],
+            limits["loaded_accounts_data_size_limit"],
+            blockhash=Hash.new_unique(),
+        )
+        second = base64.b64encode(bytes(VersionedTransaction(refreshed, [payer]))).decode()
+        sig2 = store.attach_signature("retry", second, allow_blockhash_refresh=True)
+        successful = {
+            "slot": 12,
+            "transaction": [second, "base64"],
+            "meta": {
+                "err": None,
+                "computeUnitsConsumed": 650,
+                "loadedAccountsDataSize": 128,
+                "costUnits": 999999,
+            },
+        }
+        assert store.reconcile(sig2, successful, commitment="finalized") == "finalized"
+        execution = list(
+            store.training_observations(source="historical", evidence_origin="synthetic")
+        )
+        simulation = list(
+            store.training_observations(source="simulation", evidence_origin="synthetic")
+        )
+        assert len(execution) == len(simulation) == 1
+        assert execution[0].label.compute_units == 650
+        assert execution[0].source == "synthetic"
+        assert execution[0].label_source == "historical"
+        assert simulation[0].label_source == "simulation"
+        assert execution[0].evidence_origin == "synthetic"
+        assert next(store.export_records())["execution_signature_count"] == 2
+        with pytest.raises(ValueError, match="provenance"):
+            ResourceEstimator.fit(execution + simulation)
+
+
+def test_verified_execution_excess_suspends_original_profile(tmp_path):
+    payer = Keypair()
+    wire = unsigned_wire(builder(payer=payer.pubkey()))
+    ctx, estimator, registry = release_for_wire(tmp_path / "profiles.sqlite", wire)
+    with ObservationStore(tmp_path / "outcomes.sqlite") as store, client(400) as rpc:
+        result = estimate_resources(
+            wire,
+            rpc=rpc,
+            context=ctx,
+            estimator=estimator,
+            registry=registry,
+            profile_id="review",
+            observation_id="actual",
+        )
+        assert result.status == "accepted_prediction" and result.plan is not None
+        store.ingest("actual", {"evidence_origin": "local-runtime"})
+        store.freeze_plan("actual", result.plan.model_dump(mode="json"))
+        store.finish("actual", result.model_dump(mode="json"), stream="review", cursor=1)
+        signed = VersionedTransaction(
+            decode_wire(result.unsigned_transaction_base64).message, [payer]
+        )
+        signed_wire = base64.b64encode(bytes(signed)).decode()
+        signature = store.attach_signature("actual", signed_wire)
+        outcome = {
+            "slot": 401,
+            "transaction": [signed_wire, "base64"],
+            "meta": {"err": None, "computeUnitsConsumed": 701, "loadedAccountsDataSize": 128},
+        }
+        store.reconcile(signature, outcome, commitment="finalized", registry=registry)
+        store.reconcile(signature, outcome, commitment="finalized", registry=registry)
+        assert registry.active_snapshot("review")[2] == "suspended"
+        assert sum(e["action"] == "execution" for e in registry.audit_events()) == 1
+
+
+def test_collection_latency_includes_durable_result_and_separates_rpc_retries(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def handler(_):
+        calls.append(1)
+        return httpx.Response(429) if len(calls) == 1 else httpx.Response(200, json=rpc_response())
+
+    request = ShadowRequest(
+        observation_id="timed",
+        wire_base64=unsigned_wire(builder()),
+        context=context(),
+        evidence_origin="local-runtime",
+        collection_method="offline-replay",
+    )
+    with ObservationStore(tmp_path / "timing.sqlite") as store:
+        finish = store.finish
+
+        def delayed_finish(*args, **kwargs):
+            time.sleep(0.02)
+            finish(*args, **kwargs)
+
+        monkeypatch.setattr(store, "finish", delayed_finish)
+        with RpcClient(
+            "http://example.invalid",
+            requests_per_second=10000,
+            transport=httpx.MockTransport(handler),
+        ) as rpc:
+            collect_shadow([request], store=store, rpc=rpc)
+        result = store.get("timed")["result"]
+        assert result["resource_simulation_calls"] == 1
+        assert result["rpc_attempts"] == 2
+        assert result["retries"] == 1
+        trace = store.preparation_traces()[0]
+        assert trace.total_ms >= 20
+        assert trace.rpc_attempts == 2 and trace.resource_estimation_calls == 1
+        report = preparation_report([trace])
+        assert report["collection_method"] == "offline-replay"
+        assert report["mean_inference_ms"] is None
+        assert next(store.export_records())["preparation_trace"] is not None
+
+
+def test_completed_results_are_immutable_and_duplicates_idempotent(tmp_path):
+    path = tmp_path / "concurrent.sqlite"
+    with ObservationStore(path) as first, ObservationStore(path) as second:
+        first.ingest("same", {"message": "same"})
+        result = {"status": "simulation_success", "label": 123}
+        first.finish("same", result, stream="s", cursor=1)
+        second.finish("same", result, stream="s", cursor=1)
+        assert first.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 1
+        with pytest.raises(RecordConflict):
+            second.finish("same", {"status": "unresolved"}, stream="s", cursor=2)
+        assert first.get("same")["result"] == result
+        assert first.checkpoint("s") == 1
+
+
+def test_result_message_cannot_mutate_between_collection_and_reconciliation(tmp_path):
+    payer = Keypair()
+    request = ShadowRequest(
+        observation_id="mutated",
+        wire_base64=unsigned_wire(builder(payer=payer.pubkey())),
+        context=context(),
+        evidence_origin="synthetic",
+    )
+    with ObservationStore(tmp_path / "mutated.sqlite") as store, client() as rpc:
+        collect_shadow([request], store=store, rpc=rpc)
+        result = store.get("mutated")["result"]
+        changed = bind_message(
+            unsigned_wire(builder(amount=999, payer=payer.pubkey())), current_slot=10
+        )
+        message = replace_resources(
+            decode_wire(changed.wire_base64).message,
+            result["compute_unit_limit"],
+            result["loaded_accounts_data_size_limit"],
+        )
+        result["unsigned_transaction_base64"] = unsigned_wire(message)
+        import json
+
+        with store.db:
+            store.db.execute(
+                "UPDATE observations SET result=? WHERE id='mutated'", (json.dumps(result),)
+            )
+        signed = base64.b64encode(bytes(VersionedTransaction(message, [payer]))).decode()
+        with pytest.raises(ValueError, match="message changed"):
+            store.attach_signature("mutated", signed)

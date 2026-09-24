@@ -3,6 +3,18 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - run: npm --prefix typescript ci
+      - run: npm --prefix typescript run build
+      - run: npm --prefix typescript test
   python:
     runs-on: ubuntu-latest
     strategy:

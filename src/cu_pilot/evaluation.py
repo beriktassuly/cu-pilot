@@ -63,7 +63,12 @@ def evaluate(
         raise ValueError("Simulation latency must be finite and nonnegative")
     policy = policy or Policy()
     rows = unique_observations(observations)
-    if len({row.context for row in rows}) != 1 or len({row.source for row in rows}) != 1:
+    if (
+        len({row.context for row in rows}) != 1
+        or len({row.source for row in rows}) != 1
+        or len({r.label_source or r.source for r in rows}) != 1
+        or len({r.evidence_origin for r in rows}) != 1
+    ):
         raise ValueError("Evaluation requires one context and one label source")
     development, test = split_by_slot(rows, 1 - test_fraction)
     estimator = PatternEstimator.fit(development, policy=policy)

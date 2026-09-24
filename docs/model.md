@@ -1,5 +1,10 @@
 # Estimation and simulation fallback
 
+This page describes the preserved **CU-only compatibility estimator**. New builder integrations
+use the separately versioned [dual-resource model](resource-model.md), [bound estimation
+path](integration.md) and [profile lifecycle](lifecycle.md). CU-only artifacts are never
+reinterpreted as loaded-account-data evidence.
+
 The first predictor is an empirical per-pattern quantile. Its default is p99 with
 a 10% margin, rounded upward. Set `Policy(quantile=0.95)` for the p95 variant.
 This choice keeps the strongest simple baseline transparent and dependency-free.

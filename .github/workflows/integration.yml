@@ -1,0 +1,32 @@
+name: Local resource integration
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  local-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            typescript/package-lock.json
+            tests/integration/runtime/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --dev --locked
+      - run: npm --prefix typescript ci
+      - run: npm --prefix tests/integration/runtime ci
+      - run: npm --prefix typescript test
+      - run: npm --prefix typescript run integration
+      - run: uv run python tests/integration/python_runtime.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-runtime-report
+          path: typescript/.integration-report.json
+          include-hidden-files: true

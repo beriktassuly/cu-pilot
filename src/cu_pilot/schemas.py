@@ -81,6 +81,10 @@ class Observation(StrictModel):
     slot: StrictInt = Field(ge=0)
     context: str = Field(min_length=1)
     source: Literal["historical", "simulation", "synthetic"]
+    label_source: Literal["historical", "simulation", "synthetic"] | None = None
+    evidence_origin: (
+        Literal["synthetic", "local-runtime", "live-simulation", "historical-execution"] | None
+    ) = None
     features: Features
     label: ResourceLabel
 

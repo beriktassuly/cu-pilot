@@ -11,6 +11,8 @@ from cu_pilot.data import load_observations, read_jsonl, write_observations
 from cu_pilot.estimator import PatternEstimator, Policy
 from cu_pilot.evaluation import evaluate, markdown_report
 from cu_pilot.features import extract_features
+from cu_pilot.integration_cli import app as integration_app
+from cu_pilot.lifecycle_cli import app as lifecycle_app
 from cu_pilot.parsing import normalize_observation, parse_transaction
 from cu_pilot.rpc import RpcClient, RpcError
 from cu_pilot.schemas import Prediction, PredictRequest, TransactionInput
@@ -20,6 +22,8 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
     help="Conservative Solana compute prediction with simulation fallback.",
 )
+app.add_typer(integration_app)
+app.add_typer(lifecycle_app, name="profiles")
 
 
 def _json(value: Any) -> None:

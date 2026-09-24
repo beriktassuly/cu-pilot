@@ -1,0 +1,600 @@
+{
+  "_fixture": "Synthetic unit contract only; never deployment evidence.",
+  "artifact": {
+    "artifact_version": "cu-pilot-resources-v1",
+    "context": "synthetic:paired",
+    "source": "synthetic",
+    "max_slot": "399",
+    "training_max_slot": "279",
+    "calibration_min_slot": "280",
+    "policy": {
+      "quantile": 0.99,
+      "compute_margin_bps": 1000,
+      "data_margin_bps": 1000,
+      "compute_rounding": 100,
+      "data_rounding": 1024,
+      "min_samples": 30,
+      "min_calibration_samples": 100,
+      "max_joint_underestimation_rate": 0.05,
+      "max_age_slots": "216000",
+      "near_limit_ratio": 0.9,
+      "calibration_fraction": 0.3,
+      "independence_window_slots": 1,
+      "allow_v1": false
+    },
+    "patterns": {
+      "shape-v1:paired-fixture": {
+        "train_count": 280,
+        "calibration_count": 120,
+        "training_max_slot": "279",
+        "calibration_min_slot": "280",
+        "max_slot": "399",
+        "quantile_compute_units": 1000,
+        "quantile_loaded_accounts_bytes": 2000,
+        "compute_unit_limit": 1100,
+        "loaded_accounts_data_size_limit": 3072,
+        "calibration_compute_exceedances": 0,
+        "calibration_data_exceedances": 0,
+        "calibration_joint_exceedances": 0,
+        "calibration_upper_bound": 0.022049072747129528,
+        "numerical_ranges": {
+          "signature_count": {
+            "minimum": 1,
+            "maximum": 1,
+            "missing_seen": false
+          },
+          "account_count": {
+            "minimum": 3,
+            "maximum": 3,
+            "missing_seen": false
+          },
+          "signer_count": {
+            "minimum": 1,
+            "maximum": 1,
+            "missing_seen": false
+          },
+          "writable_count": {
+            "minimum": 2,
+            "maximum": 2,
+            "missing_seen": false
+          },
+          "instruction_count": {
+            "minimum": 1,
+            "maximum": 1,
+            "missing_seen": false
+          },
+          "total_instruction_data_bytes": {
+            "minimum": 12,
+            "maximum": 12,
+            "missing_seen": false
+          },
+          "lookup_table_count": {
+            "minimum": 0,
+            "maximum": 0,
+            "missing_seen": false
+          },
+          "lookup_writable_count": {
+            "minimum": 0,
+            "maximum": 0,
+            "missing_seen": false
+          },
+          "lookup_readonly_count": {
+            "minimum": 0,
+            "maximum": 0,
+            "missing_seen": false
+          },
+          "serialized_size": {
+            "minimum": 215,
+            "maximum": 215,
+            "missing_seen": false
+          },
+          "requested_heap_bytes": {
+            "minimum": null,
+            "maximum": null,
+            "missing_seen": true
+          }
+        },
+        "instruction_data_length_ranges": [
+          {
+            "minimum": 12,
+            "maximum": 12,
+            "missing_seen": false
+          }
+        ],
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "version": "legacy"
+      }
+    },
+    "diagnostics": {
+      "input_count": 400,
+      "duplicate_count": 0,
+      "failed_count": 0,
+      "missing_compute_count": 0,
+      "missing_data_count": 0,
+      "invalid_label_count": 0,
+      "unsafe_feature_count": 0,
+      "paired_usable_count": 400,
+      "calibration_only_pattern_count": 0,
+      "ineligible_calibration_count": 0
+    },
+    "label_source": null,
+    "evidence_origin": null
+  },
+  "cases": [
+    {
+      "name": "accepted",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": 1100,
+        "loaded_accounts_data_size_limit": 3072,
+        "simulation_recommended": false,
+        "reason": "calibrated_resources",
+        "explanation": "Rounded paired-resource limits passed chronological joint calibration; the empirical bound is not a guarantee of future transaction success.",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "resource_replacement",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1100,
+        "requested_loaded_accounts_bytes": 3072,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": 1100,
+        "loaded_accounts_data_size_limit": 3072,
+        "simulation_recommended": false,
+        "reason": "calibrated_resources",
+        "explanation": "Rounded paired-resource limits passed chronological joint calibration; the empirical bound is not a guarantee of future transaction success.",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "missing_data_limit",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": null,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "missing_loaded_accounts_limit",
+        "explanation": "Fallback required: missing_loaded_accounts_limit",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "unknown",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "unknown",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "unknown",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "unknown_pattern",
+        "explanation": "Fallback required: unknown_pattern",
+        "sample_count": 0,
+        "calibration_count": 0,
+        "calibration_underestimation_upper_bound": null
+      }
+    },
+    {
+      "name": "stale",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "216400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "stale_pattern",
+        "explanation": "Fallback required: stale_pattern",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "exact_freshness_boundary",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "216399",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": 1100,
+        "loaded_accounts_data_size_limit": 3072,
+        "simulation_recommended": false,
+        "reason": "calibrated_resources",
+        "explanation": "Rounded paired-resource limits passed chronological joint calibration; the empirical bound is not a guarantee of future transaction success.",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "backwards",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "398",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "backwards_slot",
+        "explanation": "Fallback required: backwards_slot",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "context",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "other",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "context_mismatch",
+        "explanation": "Fallback required: context_mismatch",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "null_size",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": null,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "out_of_distribution",
+        "explanation": "Fallback required: out_of_distribution",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "v1_disabled",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": 1,
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108864,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "unsupported_version",
+        "explanation": "Fallback required: unsupported_version",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    },
+    {
+      "name": "invalid_data",
+      "features": {
+        "schema_version": "shape-v1",
+        "pattern_id": "shape-v1:paired-fixture",
+        "version": "legacy",
+        "signature_count": 1,
+        "account_count": 3,
+        "signer_count": 1,
+        "writable_count": 2,
+        "instruction_count": 1,
+        "program_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "instruction_data_lengths": [
+          12
+        ],
+        "total_instruction_data_bytes": 12,
+        "lookup_table_count": 0,
+        "lookup_writable_count": 0,
+        "lookup_readonly_count": 0,
+        "serialized_size": 215,
+        "requested_compute_units": 1400000,
+        "requested_loaded_accounts_bytes": 67108865,
+        "requested_heap_bytes": null,
+        "requested_micro_lamports": null,
+        "requested_priority_fee_lamports": null,
+        "risk_flags": []
+      },
+      "context": "synthetic:paired",
+      "current_slot": "400",
+      "expected": {
+        "pattern_id": "shape-v1:paired-fixture",
+        "compute_unit_limit": null,
+        "loaded_accounts_data_size_limit": null,
+        "simulation_recommended": true,
+        "reason": "invalid_loaded_accounts_budget",
+        "explanation": "Fallback required: invalid_loaded_accounts_budget",
+        "sample_count": 280,
+        "calibration_count": 120,
+        "calibration_underestimation_upper_bound": 0.022049072747129528
+      }
+    }
+  ]
+}
