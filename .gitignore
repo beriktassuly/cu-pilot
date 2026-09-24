@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+.env
+.env.*
+!.env.example
+data/
+artifacts/
+work/
+# Local build brief; keep public docs focused on the product.
+ML_AGENT_PROMPT.md
