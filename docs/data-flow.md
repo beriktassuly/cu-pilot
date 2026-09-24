@@ -1,5 +1,10 @@
 # Data flow and integration contract
 
+This page documents the original observation and CU-only inspection APIs. The integrated
+builder, durable shadow database and signature-bound execution join are documented in
+[integration and collection](integration.md). New models use [paired-resource artifacts](resource-model.md)
+and [managed profiles](lifecycle.md); the old artifacts remain a compatibility path only.
+
 ## Inputs
 
 `normalize` consumes newline-delimited objects returned by `getTransaction` with

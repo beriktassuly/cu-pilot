@@ -1,0 +1,165 @@
+{
+  "compiled_json": {
+    "message": {
+      "accountKeys": [
+        "11111111111111111111111111111112",
+        "11111111111111111111111111111113",
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111"
+      ],
+      "header": {
+        "numReadonlySignedAccounts": 0,
+        "numReadonlyUnsignedAccounts": 2,
+        "numRequiredSignatures": 1
+      },
+      "instructions": [
+        {
+          "accounts": [
+            0,
+            1
+          ],
+          "data": "3Bxs4Bc3VYuGVB19",
+          "programIdIndex": 2
+        },
+        {
+          "accounts": [
+            0,
+            1
+          ],
+          "data": "3Bxs4NMRjdEwjxAj",
+          "programIdIndex": 2
+        },
+        {
+          "accounts": [],
+          "data": "K1FDJ7",
+          "programIdIndex": 3
+        },
+        {
+          "accounts": [],
+          "data": "TB8KaB",
+          "programIdIndex": 3
+        },
+        {
+          "accounts": [],
+          "data": "3DdGGhkhJeB1",
+          "programIdIndex": 3
+        }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111"
+    },
+    "meta": {
+      "loadedAddresses": {
+        "readonly": [],
+        "writable": []
+      }
+    },
+    "version": "legacy"
+  },
+  "evidence": "sdk-serialization-only",
+  "features": {
+    "account_count": 4,
+    "instruction_count": 5,
+    "instruction_data_lengths": [
+      12,
+      12,
+      5,
+      5,
+      9
+    ],
+    "lookup_readonly_count": 0,
+    "lookup_table_count": 0,
+    "lookup_writable_count": 0,
+    "pattern_id": "shape-v1:1f826d3f47f656bb56a177d3745dea76a2d233654ea41114a2909f8bba5ebc71",
+    "program_ids": [
+      "11111111111111111111111111111111",
+      "11111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111"
+    ],
+    "requested_compute_units": 1400000,
+    "requested_heap_bytes": null,
+    "requested_loaded_accounts_bytes": 67108864,
+    "requested_micro_lamports": "9007199254740993",
+    "requested_priority_fee_lamports": null,
+    "risk_flags": [],
+    "schema_version": "shape-v1",
+    "serialized_size": 292,
+    "signature_count": 1,
+    "signer_count": 1,
+    "total_instruction_data_bytes": 43,
+    "version": "legacy",
+    "writable_count": 2
+  },
+  "messageIdentity": "message-v1:3995bebf4fffea7fc70abde00758bd458d03f403001481760df0977830ede765",
+  "sdk": "@solana/kit@8.3.0",
+  "transaction": {
+    "accounts": [
+      {
+        "pubkey": "11111111111111111111111111111112",
+        "signer": true,
+        "source": "static",
+        "writable": true
+      },
+      {
+        "pubkey": "11111111111111111111111111111113",
+        "signer": false,
+        "source": "static",
+        "writable": true
+      },
+      {
+        "pubkey": "11111111111111111111111111111111",
+        "signer": false,
+        "source": "static",
+        "writable": false
+      },
+      {
+        "pubkey": "ComputeBudget111111111111111111111111111111",
+        "signer": false,
+        "source": "static",
+        "writable": false
+      }
+    ],
+    "instructions": [
+      {
+        "accounts": [
+          0,
+          1
+        ],
+        "data_hex": "0200000040420f0000000000",
+        "program_id": "11111111111111111111111111111111"
+      },
+      {
+        "accounts": [
+          0,
+          1
+        ],
+        "data_hex": "0200000080841e0000000000",
+        "program_id": "11111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "02c05c1500",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "0400000004",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "030100000000002000",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      }
+    ],
+    "lookup_readonly_count": 0,
+    "lookup_table_count": 0,
+    "lookup_writable_count": 0,
+    "serialized_size": 292,
+    "signature_count": 1,
+    "transaction_config": null,
+    "version": "legacy"
+  },
+  "wireBase64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAIEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUCAgABDAIAAABAQg8AAAAAAAICAAEMAgAAAICEHgAAAAAAAwAFAsBcFQADAAUEAAAABAMACQMBAAAAAAAgAA=="
+}

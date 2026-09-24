@@ -14,5 +14,12 @@ dist/
 data/
 artifacts/
 work/
+node_modules/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
 # Local build brief; keep public docs focused on the product.
 ML_AGENT_PROMPT.md

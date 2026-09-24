@@ -298,7 +298,11 @@ class PatternEstimator:
         sources = {observation.source for observation in observations}
         if len(contexts) != 1:
             raise ValueError("fit one context at a time; cluster/program epochs must not mix")
-        if len(sources) != 1:
+        if (
+            len(sources) != 1
+            or len({r.label_source or r.source for r in observations}) != 1
+            or len({r.evidence_origin for r in observations}) != 1
+        ):
             raise ValueError("historical, simulation, and synthetic provenance must not mix")
         seen: dict[str, Observation] = {}
         diagnostics = {

@@ -1,0 +1,184 @@
+{
+  "compiled_json": {
+    "message": {
+      "accountKeys": [
+        "11111111111111111111111111111112",
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111"
+      ],
+      "addressTableLookups": [
+        {
+          "accountKey": "11111111111111111111111111111114",
+          "readonlyIndexes": [],
+          "writableIndexes": [
+            0
+          ]
+        }
+      ],
+      "header": {
+        "numReadonlySignedAccounts": 0,
+        "numReadonlyUnsignedAccounts": 2,
+        "numRequiredSignatures": 1
+      },
+      "instructions": [
+        {
+          "accounts": [
+            0,
+            3
+          ],
+          "data": "3Bxs4Bc3VYuGVB19",
+          "programIdIndex": 1
+        },
+        {
+          "accounts": [
+            0,
+            3
+          ],
+          "data": "3Bxs4NMRjdEwjxAj",
+          "programIdIndex": 1
+        },
+        {
+          "accounts": [],
+          "data": "K1FDJ7",
+          "programIdIndex": 2
+        },
+        {
+          "accounts": [],
+          "data": "TB8KaB",
+          "programIdIndex": 2
+        },
+        {
+          "accounts": [],
+          "data": "3DdGGhkhJeB1",
+          "programIdIndex": 2
+        }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111"
+    },
+    "meta": {
+      "loadedAddresses": {
+        "readonly": [],
+        "writable": [
+          "11111111111111111111111111111113"
+        ]
+      }
+    },
+    "version": 0
+  },
+  "evidence": "sdk-serialization-only",
+  "features": {
+    "account_count": 4,
+    "instruction_count": 5,
+    "instruction_data_lengths": [
+      12,
+      12,
+      5,
+      5,
+      9
+    ],
+    "lookup_readonly_count": 0,
+    "lookup_table_count": 1,
+    "lookup_writable_count": 1,
+    "pattern_id": "shape-v1:27a2f02cd6b7f48da5c11c2d99126f71cc3f0d3b3b258c85b703f614f387f25d",
+    "program_ids": [
+      "11111111111111111111111111111111",
+      "11111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111"
+    ],
+    "requested_compute_units": 1400000,
+    "requested_heap_bytes": null,
+    "requested_loaded_accounts_bytes": 67108864,
+    "requested_micro_lamports": "9007199254740993",
+    "requested_priority_fee_lamports": null,
+    "risk_flags": [],
+    "schema_version": "shape-v1",
+    "serialized_size": 297,
+    "signature_count": 1,
+    "signer_count": 1,
+    "total_instruction_data_bytes": 43,
+    "version": 0,
+    "writable_count": 2
+  },
+  "lookup": {
+    "checkedSlot": "50",
+    "cluster": "fixture-local",
+    "tables": {
+      "11111111111111111111111111111114": [
+        "11111111111111111111111111111113"
+      ]
+    }
+  },
+  "messageIdentity": "message-v1:bdf1bd629daa4243d2698e5dcca1b9ec355af1ee6044081e2b867cd3ecf417d5",
+  "sdk": "@solana/kit@8.3.0",
+  "transaction": {
+    "accounts": [
+      {
+        "pubkey": "11111111111111111111111111111112",
+        "signer": true,
+        "source": "static",
+        "writable": true
+      },
+      {
+        "pubkey": "11111111111111111111111111111111",
+        "signer": false,
+        "source": "static",
+        "writable": false
+      },
+      {
+        "pubkey": "ComputeBudget111111111111111111111111111111",
+        "signer": false,
+        "source": "static",
+        "writable": false
+      },
+      {
+        "pubkey": "11111111111111111111111111111113",
+        "signer": false,
+        "source": "lookup",
+        "writable": true
+      }
+    ],
+    "instructions": [
+      {
+        "accounts": [
+          0,
+          3
+        ],
+        "data_hex": "0200000040420f0000000000",
+        "program_id": "11111111111111111111111111111111"
+      },
+      {
+        "accounts": [
+          0,
+          3
+        ],
+        "data_hex": "0200000080841e0000000000",
+        "program_id": "11111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "02c05c1500",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "0400000004",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      },
+      {
+        "accounts": [],
+        "data_hex": "030100000000002000",
+        "program_id": "ComputeBudget111111111111111111111111111111"
+      }
+    ],
+    "lookup_readonly_count": 0,
+    "lookup_table_count": 1,
+    "lookup_writable_count": 1,
+    "serialized_size": 297,
+    "signature_count": 1,
+    "transaction_config": null,
+    "version": 0
+  },
+  "wireBase64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQACAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQECAAMMAgAAAEBCDwAAAAAAAQIAAwwCAAAAgIQeAAAAAAACAAUCwFwVAAIABQQAAAAEAgAJAwEAAAAAACAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAQAA"
+}

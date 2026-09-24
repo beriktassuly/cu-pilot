@@ -1,5 +1,38 @@
 # Research and implementation decisions
 
+## Integration follow-up (2026-09-24)
+
+The earlier iteration decisions below describe the retained CU-only compatibility path.
+The integration now uses **Solders 0.29.0** for authoritative Python decoding/preparation
+and **Solana Kit 8.3.0** for TypeScript. Both SDK codecs round-trip shared legacy/v0/v1
+fixtures with identical message and shape identities. This replaces the earlier decision
+to accept only caller-prepared binary messages for simulation; it does not add a custom
+unverified wire codec. Sources: [Solders project](https://github.com/kevinheavey/solders),
+[Kit releases](https://github.com/anza-xyz/kit/releases), and the pinned installed SDK sources.
+
+Rechecked official [versioned transaction rules](https://solana.com/docs/core/transactions/versioned-transactions),
+[compute budgets](https://solana.com/docs/core/fees/compute-budget), and
+[simulation RPC](https://solana.com/docs/rpc/http/simulatetransaction). v1 is a distinct wire
+format, its unset compute/data limits are zero, and its priority fee is an absolute number
+of lamports. Legacy/v0 resource instructions contribute topology and execution cost.
+Accordingly both resource placeholders precede feature extraction, simulations use maximum
+budgets, and controlled replacement preserves fees/heap/order. The integration does not
+claim that lowering v1 resources lowers an unchanged priority fee.
+
+Local tests use Surfpool/Surfnet 1.5.0 in an offline private instance. Real Kit v1 messages
+successfully simulate and execute there. Its RPC reports `solana-core=4.1.2` and
+`feature-set=3345198602`; that reported compatibility string alone would not establish v1
+capability. The real round-trip test is the evidence for the supported local matrix. It is
+not evidence about a public cluster's current feature activation or an external provider.
+See [local runtime validation](local-runtime.md) for exact commands and gaps.
+
+The new estimator uses fitting-only marginal quantiles but calibrates the **union** of
+compute/data exceedances on paired observations after rounding. Artifact versioning,
+chronological partitions, explicit evidence provenance, operator release and cached
+deployment checks are described in [resource model](resource-model.md),
+[integration](integration.md), and [lifecycle](lifecycle.md). No learned regressor was added:
+there is no real workload evidence establishing an advantage over these simple baselines.
+
 Checked **2026-09-24** against official documentation and project sources. These are
 implementation inputs, not a claim that the prototype has demonstrated production
 safety. Protocol limits and SDK support must be rechecked before deployment.

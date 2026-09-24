@@ -1,0 +1,206 @@
+[
+  {
+    "name": "recipient-identity",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "accounts",
+          1,
+          "pubkey"
+        ],
+        "value": "11111111111111111111111111111119"
+      }
+    ],
+    "pattern_id": "shape-v1:1f826d3f47f656bb56a177d3745dea76a2d233654ea41114a2909f8bba5ebc71",
+    "risk_flags": []
+  },
+  {
+    "name": "cross-instruction-alias",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "instructions",
+          1,
+          "accounts",
+          1
+        ],
+        "value": 0
+      }
+    ],
+    "pattern_id": "shape-v1:8029af4eba864eb542e4b821d1e9fc10fa9b6ffdbf5cce59740cbfca891ed06e",
+    "risk_flags": []
+  },
+  {
+    "name": "system-discriminator",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "instructions",
+          0,
+          "data_hex"
+        ],
+        "value": "0300000040420f0000000000"
+      }
+    ],
+    "pattern_id": "shape-v1:febd6a27a4571ffcacce28257bc52a0cbda37499f91f04ee8f02d6773a215a87",
+    "risk_flags": []
+  },
+  {
+    "name": "data-length",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "instructions",
+          0,
+          "data_hex"
+        ],
+        "value": "0200000040420f000000000000"
+      }
+    ],
+    "pattern_id": "shape-v1:134d3e00463bed9e4debb97e92628802a51205c07101d1364a87ecb315503aae",
+    "risk_flags": []
+  },
+  {
+    "name": "resource-replacement",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "instructions",
+          2,
+          "data_hex"
+        ],
+        "value": "02e8030000"
+      },
+      {
+        "path": [
+          "instructions",
+          3,
+          "data_hex"
+        ],
+        "value": "0400800000"
+      }
+    ],
+    "pattern_id": "shape-v1:1f826d3f47f656bb56a177d3745dea76a2d233654ea41114a2909f8bba5ebc71",
+    "risk_flags": []
+  },
+  {
+    "name": "fee-is-not-shape",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "instructions",
+          4,
+          "data_hex"
+        ],
+        "value": "030200000000002000"
+      }
+    ],
+    "pattern_id": "shape-v1:1f826d3f47f656bb56a177d3745dea76a2d233654ea41114a2909f8bba5ebc71",
+    "risk_flags": []
+  },
+  {
+    "name": "readonly-recipient",
+    "base": "legacy",
+    "mutations": [
+      {
+        "path": [
+          "accounts",
+          1,
+          "writable"
+        ],
+        "value": false
+      }
+    ],
+    "pattern_id": "shape-v1:dc3599e4417d617acdc09686438ce796b89112b21db2b80afde7ac8c6d30c3c4",
+    "risk_flags": []
+  },
+  {
+    "name": "lookup-readonly",
+    "base": "0",
+    "mutations": [
+      {
+        "path": [
+          "accounts",
+          3,
+          "writable"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "lookup_writable_count"
+        ],
+        "value": 0
+      },
+      {
+        "path": [
+          "lookup_readonly_count"
+        ],
+        "value": 1
+      }
+    ],
+    "pattern_id": "shape-v1:b9d12617631c7742a30b7f7a3e8bf7c5395b14911577d181ee8c5c23a08f27a0",
+    "risk_flags": []
+  },
+  {
+    "name": "v1-heap",
+    "base": "1",
+    "mutations": [
+      {
+        "path": [
+          "transaction_config",
+          "heapSize"
+        ],
+        "value": 65536
+      }
+    ],
+    "pattern_id": "shape-v1:1507151e8e2f98ea9b74fc422e492464bdeace2e39daff148f7341b2430eee12",
+    "risk_flags": []
+  },
+  {
+    "name": "v1-fee-is-not-shape",
+    "base": "1",
+    "mutations": [
+      {
+        "path": [
+          "transaction_config",
+          "priorityFee"
+        ],
+        "value": "18446744073709551615"
+      }
+    ],
+    "pattern_id": "shape-v1:3e6f1e27e87f093543ee9534731f2d4993af7a3d105f89003dd10b967c16a986",
+    "risk_flags": []
+  },
+  {
+    "name": "v1-unset-limits",
+    "base": "1",
+    "mutations": [
+      {
+        "path": [
+          "transaction_config",
+          "computeUnitLimit"
+        ],
+        "value": null
+      },
+      {
+        "path": [
+          "transaction_config",
+          "loadedAccountsDataSizeLimit"
+        ],
+        "value": null
+      }
+    ],
+    "pattern_id": "shape-v1:3e6f1e27e87f093543ee9534731f2d4993af7a3d105f89003dd10b967c16a986",
+    "risk_flags": [
+      "v1_zero_compute_limit",
+      "v1_zero_loaded_accounts_limit"
+    ]
+  }
+]

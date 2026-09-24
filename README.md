@@ -1,14 +1,76 @@
 # CU Pilot
 
-**CU Pilot learns when simulation is unnecessary.**
+**CU Pilot learns when a separate resource-estimation simulation is unnecessary.**
 
-A local Python toolkit for testing whether repeated Solana transaction shapes can use a
-conservative compute-unit limit without another simulation call. It fits per-pattern
-quantiles, checks them on later observations, and recommends simulation whenever its
-policy cannot accept a prediction.
+A local Python and TypeScript integration for controlled families of Solana transactions.
+It fits paired compute-unit and loaded-account-data quantiles, checks their joint resource
+exceedance on later observations, and actually simulates when a released profile cannot
+be trusted. The application keeps responsibility for validation, signing, and sending.
 
-This is an internal research foundation. It has deterministic offline tests and a synthetic
-demo, **not a validated mainnet model**. It does not sign, send, or modify transactions.
+This is an experimental integration, **not a production-validated model**. The library
+prepares unsigned messages; it never signs or submits transactions. Local integration tests
+use ephemeral test keys and a private local runtime only. No customer or demand claim is made.
+
+## Integrated resource workflow
+
+Python 3.11+ and Node 24+ are required for both language runtimes. The Python SDK is
+Solders 0.29; TypeScript uses Solana Kit 8.3. See the committed lockfiles.
+
+```sh
+uv sync --locked --group dev
+npm --prefix typescript ci
+npm --prefix typescript test
+npm --prefix typescript run build
+
+# Fully offline: real SDK serialization, explicitly synthetic replay measurements.
+uv run python examples/shadow_replay.py
+uv run cu-pilot shadow artifacts/shadow/requests.jsonl artifacts/shadow/events.sqlite --replay
+# The same invocation resumes/idempotently deduplicates the existing collection.
+uv run cu-pilot shadow artifacts/shadow/requests.jsonl artifacts/shadow/events.sqlite --replay
+uv run cu-pilot export-shadow artifacts/shadow/events.sqlite artifacts/shadow/audit.jsonl
+uv run cu-pilot preparation-report artifacts/shadow/events.sqlite
+uv run cu-pilot export-shadow artifacts/shadow/events.sqlite artifacts/shadow/observations.jsonl --training-source simulation --evidence-origin synthetic
+uv run cu-pilot evaluate-resources artifacts/shadow/observations.jsonl artifacts/shadow/evaluation.json
+uv run cu-pilot train-resources artifacts/shadow/observations.jsonl artifacts/shadow/model.json
+```
+
+Training produces a **candidate**, never an active release. Shadow collection always
+simulates, persists the prediction before its label, and records zero actual avoided calls.
+Use separate datasets for simulation and historical execution, and for each evidence origin.
+Synthetic examples cannot justify a production release.
+
+The application flow is:
+
+```text
+builder → authoritative serialized message → SDK decode and budget placeholders
+        → features + exact message identity → local artifact and lifecycle checks
+        → accepted limits OR actual high-budget simulation OR unresolved error
+        → unsigned prepared message → caller validation/signing/sending
+```
+
+Python exposes `cu_pilot.integration.estimate_resources`, `EstimationContext`,
+`cu_pilot.shadow.collect_shadow`, `ObservationStore`, `ResourceEstimator`, and
+`ProfileRegistry`. TypeScript exposes `estimateResources`, the Kit builder adapter, portable
+profile decisions, and exact-message verification. Prediction needs no prediction server.
+An accepted profile uses cached deployment checks; v0 lookup reads and sampled controls
+remain explicit overhead. Old CU-only artifacts cannot authorize dual-resource skipping.
+
+Read [integration and collection](docs/integration.md), [joint resource model](docs/resource-model.md),
+[TypeScript](docs/typescript.md), [profile operations](docs/lifecycle.md), and
+[real local runtime tests](docs/local-runtime.md) for complete commands and limitations.
+The [verification report](docs/verification.md) records test results, measured costs,
+and the remaining production-validation boundary.
+
+`cu-pilot estimate-resources transaction.base64 --context context.json` uses the endpoint in
+`CU_PILOT_RPC_URL` and returns `accepted_prediction`, `simulation_success`, or `unresolved`.
+No model or released profile means simulation. Use `--registry`, `--profile`, and optionally
+`--model` for released profiles. `--force-simulation` overrides skipping. Keep URLs in the
+environment. The integration preserves preflight and business-validation policy.
+
+## CU-only compatibility workflow
+
+The original CLI/API and artifact below remain available for research compatibility. Their
+`predict` command is a recommendation only; use the integrated resource path above in a builder.
 
 ## Quick start
 
@@ -47,7 +109,7 @@ Run the command to inspect the full comparison; these numbers are deliberately s
 - Explicit read-only RPC collection and simulation commands, a CLI, and an inference API.
 - Offline parser, policy, RPC failure, API, CLI, and evaluation regression tests; CI and locked dependencies.
 
-The default estimator predicts **CU only**. v1 inputs always recommend simulation because
+The original compatibility estimator predicts **CU only**. v1 inputs recommend simulation because
 they also need a validated loaded-account-data limit. Legacy/v0 inputs with a restrictive
 explicit loaded-data cap also fall back. The simulation helper returns both resources when
 the node supplies them and requires both for v1.
@@ -71,7 +133,8 @@ flowchart LR
 instructions, balances, slot, signatures, and fees are not predictive features.
 The observation slot is used for ordering and freshness. Caller-selected `context` scopes
 a model to a cluster, runtime/program deployment, and workload policy. Change it after a
-relevant deployment or runtime change; CU Pilot does not discover upgrades automatically.
+relevant deployment or runtime change. This original compatibility path does not use the
+deployment watcher provided by the integrated resource workflow.
 
 For data contracts and assumptions, see [data flow](docs/data-flow.md),
 [patterns](docs/patterns.md), [model policy](docs/model.md), and [research](docs/research.md).
