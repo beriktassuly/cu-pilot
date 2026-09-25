@@ -6,7 +6,22 @@ that each outcome has the same message identity, profile revision, artifact dige
 prediction, sampling probability and selected status as the frozen decision. It
 calculates resource excess from the measured labels; callers cannot override the
 result by changing `resourceExcess`. Invalid or conflicting records are rejected
-before writing. Reopening with a different failure-streak policy fails closed.
+before writing. Each decision persists `maxControlFailureStreak` from its release's
+`max_control_failure_streak`. Failure streaks and thresholds are keyed by profile,
+revision and artifact digest; unrelated profiles do not share counts. Replaying the
+journal restores both counts and their released thresholds. A complete successful
+control resets only that release's streak. A threshold cannot change within the same
+release identity. The optional second constructor argument is a compatibility pin,
+not a fallback policy: it rejects any decision or recovery using a different threshold.
+
+An RPC simulation with `err: null` and missing or invalid resource measurements has
+status `incomplete`. Its valid individual measurements remain in the separate control
+event. Either known resource excess suspends immediately, even if the counterpart is
+missing. An incomplete control without known excess increments the failure streak;
+it never supplies an accepted estimate or unsigned result. Complete paired measurements
+are required for status `success`. Transaction errors and transport failures have
+status `failed`; their partial execution usage is not treated as successful demand.
+The journal validates these distinctions and recomputes excess before writing/replay.
 
 A quarantine blocks the profile until an explicit recovery operation qualifies a
 new release. Changing a revision number or reusing a previous digest does not
@@ -48,8 +63,14 @@ its original check time; every subsequent runtime estimate still checks current
 snapshot and deployment freshness. Only the exact recovered revision and digest
 can proceed. Prior revisions, digest aliases and other revisions remain blocked.
 A new control excess or deterioration suspends the recovered revision again.
+The recovered revision uses its own released threshold, recorded in the recovery
+event and subsequent decisions, without altering old revisions' thresholds or history.
 
-The current journal requires artifact digests and an immutable failure-streak
-policy on its entries. Earlier experimental journals without those fields fail
-closed; no automatic migration clears their suspension evidence. Preserve such
-logs for review. Do not delete or replace a journal to bypass quarantine.
+The current journal schema is `cu-pilot-controls-v2`. Version 1 recorded a store-wide
+threshold that could differ from the actual release, so its entries cannot prove
+which release policy governed a decision. Version 1 and earlier experimental journals
+fail closed with `incompatible_control_journal`; they are never silently relabeled as
+version 2. There is no automatic migration. Preserve the original journal and remain
+in forced simulation until operator-reviewed reconstruction can retain its decisions,
+outcomes and quarantine evidence under verified release policies. Do not delete or
+replace a journal to bypass quarantine.

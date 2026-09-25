@@ -164,6 +164,26 @@ incomplete/failed controls suspend for deterioration. The failure streak resets 
 a complete successful control. Probability zero is allowed for explicit experiments
 but provides no ongoing audited deployment evidence.
 
+The estimation and shadow adapters retain validated partial RPC measurements when
+the estimate remains unresolved. An error-free simulation with a known CU or data
+excess suspends immediately even if the other resource is missing. Under-limit
+incomplete measurements and failed transactions count toward deterioration instead.
+Shadow restart reuses the frozen evidence, including observation slot and elapsed
+time, so replay neither repeats the simulation nor increments its failure streak.
+
+There is one explicit upgrade limitation for existing Python registries. Earlier
+adapters could audit an unresolved partial simulation as a failed control without
+its known measurements. Replaying that completed shadow result now produces the
+corrected interpretation, which conflicts with the already immutable control
+outcome. Resume stops with `Conflicting control outcome`; it does not overwrite
+the previous audit, increment the streak, or resimulate. Preserve both the shadow
+database and registry and enable forced simulation while an operator reviews the
+raw result and earlier audit. No automatic audit migration is provided. Any reviewed
+migration must retain the original selection, both interpretations and quarantine
+history; deleting records or switching to an empty registry is not a recovery
+procedure. Unaffected existing control outcomes and newly collected partial
+outcomes retain normal idempotent replay.
+
 `record_execution(...)` is a separate, idempotent audit path. The reconciliation
 caller first verifies message/signature correspondence and then supplies the original
 decision revision and limits. Successful measured CU or data excess suspends that

@@ -43,6 +43,12 @@ measurements, resource limits, unsigned output, full preparation timing, RPC att
 and control selection. Failed, timed-out, cancelled, incomplete, stale-context and over-cap
 simulations yield `unresolved`, with no final resource limit or transaction.
 
+`estimate_resources` measures RPC attempts and retries over the entire operation,
+including lookup preparation and preparation failures. Earlier calls on the same
+client are excluded. A retried state read remains one logical state read; attempts,
+retries and resource simulations are separate counters. The lower-level
+`execute_decision` counters cover execution of its already prepared plan only.
+
 ## Message binding and transformations
 
 The authoritative input is the serialized transaction. Solders/Kit decodes it; both features
@@ -189,6 +195,12 @@ signature before binding the signature to the request. Reconciliation requires r
 transaction bytes, matching signature/message and explicit metadata error status. Missing
 outcomes stay missing/pending/unavailable; unavailable is not proof of a fork rollback.
 Confirmed outcomes can change before finality; finalized conflicts are retained as conflicts.
+The request's aggregate outcome uses the latest recorded revision of every attached signature:
+`finalized`, `confirmed`, `pending_finality`, `pending`, `unavailable`, then `missing`, in descending
+precedence. This describes the strongest commitment evidence, including failed execution; it
+does not imply success or that every retry has finished. A pending or unavailable retry cannot
+erase another attempt's finalized evidence. Per-attempt statuses and labels remain in the audit
+export, and duplicate old revisions do not replace newer evidence.
 Duplicate results do not add labels, and retries of one request contribute at most one selected
 finalized execution label. Simulation and execution error reports remain separate. No method
 replays a historical transaction against today's state and calls it historical execution.

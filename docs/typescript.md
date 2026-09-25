@@ -60,8 +60,14 @@ Skipping requires active, current deployment evidence, an allowlisted workload,
 an explicit budget-independent contract and a durable control store. Budget-sensitive
 workloads simulate and retain maximum resource budgets. `FileControlStore` writes and
 fsyncs the selection before simulation, records outcomes separately, and quarantines
-resource excess or repeated failed controls across restarts. It is a single-process
-journal; multiple instances within that process synchronously replay new records
+resource excess or repeated failed controls across restarts.
+The immutable release's `max_control_failure_streak` is copied into each
+persisted decision as `maxControlFailureStreak`; failure counts are isolated by
+profile, revision and artifact digest. The store has no overriding default threshold.
+Its optional second constructor argument is an explicit compatibility pin: a
+different released threshold is rejected. Deployment freshness intervals accept
+positive finite seconds through 3,600, including fractional intervals, as Python does.
+It is a single-process journal; multiple instances within that process synchronously replay new records
 before checks and writes. Each check verifies the existing journal prefix, so its
 local read/hash cost grows with retained history. Multiple writer processes are
 unsupported. Corrupted/torn records and changed prefixes fail closed. Recovery requires operator review and

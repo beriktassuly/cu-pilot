@@ -85,6 +85,8 @@ class Observation(StrictModel):
     evidence_origin: (
         Literal["synthetic", "local-runtime", "live-simulation", "historical-execution"] | None
     ) = None
+    collection_method: Literal["prospective", "offline-replay"] | None = None
+    collection_mode: Literal["shadow", "deployment"] | None = None
     features: Features
     label: ResourceLabel
 

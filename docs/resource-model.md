@@ -32,6 +32,14 @@ does not change its original origin; `collection_method="offline-replay"` record
 how it was ingested. A synthetic origin cannot be relabeled as simulation evidence
 in a resource artifact.
 
+Observations can also retain optional `collection_method` (`prospective` or
+`offline-replay`) and `collection_mode` (`shadow` or `deployment`). Shadow training
+exports populate these from the persisted preparation trace when available;
+manually ingested records and older datasets may leave them unknown. Historical
+labels retain their original preparation provenance: reconciling execution does
+not turn a shadow preparation into a deployment preparation. These metadata fields
+do not change fitting or require artifact migration.
+
 Deduplicate record IDs and reject conflicting duplicates before splitting.
 Freeze chronological fit/calibration boundaries from **all** remaining rows,
 before label, feature, or policy filtering. Evaluation freezes the outer test
@@ -123,8 +131,23 @@ fall back; it does not pretend a statistical profile is a released deployment.
 The cache learns only fitting labels initially. It refreshes from successful
 fallback measurements after a slot ends; cache hits do not receive free labels.
 Controls are deterministically sampled from request IDs and a seed before looking
-at labels. An observed control excess suspends that pattern for later slots in
-the replay. Report selected controls separately: they describe eligible selected
+at labels. The complete-policy replay represents one frozen profile revision, so
+control failure state and suspension cover every pattern in that artifact. Replay
+separate reports for different released profiles or revisions; the eligibility
+callback cannot silently replace the release under evaluation. Set
+`max_control_failure_streak` to the released manifest's value (default three).
+Successful complete controls reset the streak. Failed or incomplete controls
+increase it, and reaching the threshold suspends later decisions. Any known
+successful resource excess also suspends, even if the other resource measurement
+is missing; failed partial execution is not treated as demand. A later success
+cannot undo suspension.
+
+Apply control outcomes only after their slot ends, in stable `(slot, record_id)`
+order, so none can affect an earlier or same-slot decision. This replay ordering
+is an explicit assumption when actual outcome arrival order is unavailable.
+Unselected requests provide no control outcome. Paired joint-risk denominators
+remain separate from known partial excess and failed/incomplete control counts.
+Report selected controls separately: they describe eligible selected
 traffic, not the whole deployment population, and suspension changes that
 population over time. The evaluator does not train from control labels.
 
@@ -142,7 +165,13 @@ complete preparation span, including builder preparation, state reads, deploymen
 checks, artifact refresh, simulation and logging. It separately counts estimation,
 control, preflight and validation calls, state reads and artifact refreshes. Empty
 trace lists report null latency percentiles, not invented measurements. Traces
-must belong to the frozen test partition, and mixed evidence modes are rejected.
+must belong to the frozen test partition and match the observation's evidence
+origin, collection method and mode. Equal record IDs alone do not establish this
+relationship. Only the synthetic origin can be inferred from an older
+`source="synthetic"` record; missing collection semantics are never guessed.
+Older datasets remain evaluable without attached timing. Use `preparation_report`
+separately for independently measured timing datasets that cannot establish this
+join. Mixed evidence modes are rejected.
 There is no claim about improved landing, network fees or production reliability.
 
 Each proposed policy also reports configured priority fees by transaction version,

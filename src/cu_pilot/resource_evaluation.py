@@ -12,6 +12,7 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import Field, StrictInt, model_validator
@@ -24,12 +25,46 @@ from cu_pilot.schemas import (
     MAX_LOADED_ACCOUNT_BYTES,
     Features,
     Observation,
+    ResourceLabel,
     StrictModel,
 )
 
 Limits = tuple[int, int] | None
 Eligibility = Callable[[Features, int], str | None]
 CallerPolicy = Callable[[Features, int], Limits]
+
+
+@dataclass
+class _ControlReplayState:
+    """One frozen profile revision, including every pattern in its artifact."""
+
+    failure_streak: int = 0
+    failed_or_incomplete: int = 0
+    known_resource_excesses: int = 0
+    suspension_reason: str | None = None
+
+    def observe(self, label: ResourceLabel, limits: tuple[int, int], threshold: int) -> None:
+        successful = label.success and label.error is None
+        complete = (
+            successful
+            and label.compute_units is not None
+            and label.loaded_accounts_bytes is not None
+        )
+        self.failure_streak = 0 if complete else self.failure_streak + 1
+        self.failed_or_incomplete += not complete
+        excess = successful and (
+            label.compute_units is not None
+            and label.compute_units > limits[0]
+            or label.loaded_accounts_bytes is not None
+            and label.loaded_accounts_bytes > limits[1]
+        )
+        self.known_resource_excesses += excess
+        # A later successful result cannot clear an already recorded quarantine.
+        if self.suspension_reason is None:
+            if excess:
+                self.suspension_reason = "control_excess_suspended"
+            elif self.failure_streak >= threshold:
+                self.suspension_reason = "control_deterioration_suspended"
 
 
 def configured_priority_fee(features: Features, compute_unit_limit: int) -> int | None:
@@ -159,6 +194,24 @@ def preparation_report(traces: list[PreparationTrace]) -> dict[str, Any]:
     return result
 
 
+def _validate_preparation_join(rows: list[Observation], traces: list[PreparationTrace]) -> None:
+    by_id = {row.record_id: row for row in rows}
+    for trace in traces:
+        row = by_id.get(trace.observation_id)
+        if row is None:
+            raise ValueError("preparation trace does not belong to the frozen test partition")
+        # Old synthetic inputs already declare their origin through source. Other
+        # unknown origins cannot distinguish local execution from public-network
+        # evidence, so they cannot be joined to measured preparation claims.
+        origin = row.evidence_origin or ("synthetic" if row.source == "synthetic" else None)
+        if origin is None or origin != trace.evidence:
+            raise ValueError("preparation trace evidence origin does not match its observation")
+        if row.collection_method is None or row.collection_mode is None:
+            raise ValueError("preparation trace requires declared observation collection semantics")
+        if (row.collection_method, row.collection_mode) != (trace.collection_method, trace.mode):
+            raise ValueError("preparation trace collection semantics do not match its observation")
+
+
 def _summary(rows: list[Observation], limits: list[Limits], controls: list[bool]) -> dict[str, Any]:
     accepted = sum(limit is not None for limit in limits)
     scored = [
@@ -227,6 +280,7 @@ def evaluate_resources(
     lifecycle_eligibility: Eligibility | None = None,
     control_probability: float = 0.05,
     control_seed: str = "evaluation-v1",
+    max_control_failure_streak: int = 3,
     cache_refresh_slots: int = 100,
     preparation_traces: list[PreparationTrace] | None = None,
 ) -> dict[str, Any]:
@@ -234,6 +288,8 @@ def evaluate_resources(
         raise ValueError("invalid test fraction or control probability")
     if type(cache_refresh_slots) is not int or cache_refresh_slots < 1:
         raise ValueError("cache refresh interval must be positive")
+    if type(max_control_failure_streak) is not int or not 1 <= max_control_failure_streak < 2**32:
+        raise ValueError("control failure threshold must be a positive uint32 integer")
     policy = policy or ResourcePolicy()
     fixed_limits = _valid_limits(fixed_limits)
     rows = unique_observations(observations)
@@ -340,21 +396,22 @@ def evaluate_resources(
     complete: list[Limits] = []
     controls: list[bool] = []
     reasons: list[str] = []
-    suspended: set[str] = set()
-    pending_suspensions: set[str] = set()
+    control_state = _ControlReplayState()
+    pending_controls: list[tuple[ResourceLabel, tuple[int, int]]] = []
     last_slot = -1
     for row, proposal, prediction in zip(test, statistical, predictions, strict=True):
         if row.slot != last_slot:
-            suspended.update(pending_suspensions)
-            pending_suspensions = set()
+            for label, limits in pending_controls:
+                control_state.observe(label, limits, max_control_failure_streak)
+            pending_controls = []
             last_slot = row.slot
         reason = (
             lifecycle_eligibility(row.features, row.slot)
             if lifecycle_eligibility
             else "lifecycle_evidence_unavailable"
         )
-        if row.features.pattern_id in suspended:
-            reason = "control_excess_suspended"
+        if control_state.suspension_reason is not None:
+            reason = control_state.suspension_reason
         accepted = proposal if reason is None else None
         selected = accepted is not None and _select(
             row.record_id, control_seed, control_probability
@@ -362,15 +419,10 @@ def evaluate_resources(
         complete.append(accepted)
         controls.append(selected)
         reasons.append(reason or prediction.reason)
-        if selected and accepted and paired_label(row):
-            assert (
-                row.label.compute_units is not None and row.label.loaded_accounts_bytes is not None
-            )
-            if (
-                row.label.compute_units > accepted[0]
-                or row.label.loaded_accounts_bytes > accepted[1]
-            ):
-                pending_suspensions.add(row.features.pattern_id)
+        if selected and accepted is not None:
+            pending_controls.append((row.label, accepted))
+    for label, limits in pending_controls:
+        control_state.observe(label, limits, max_control_failure_streak)
     methods["complete_policy"] = complete
     no_controls = [False] * len(test)
     summaries = {
@@ -406,8 +458,7 @@ def evaluate_resources(
             row.label.compute_units > proposal[0] or row.label.loaded_accounts_bytes > proposal[1]
         )
     traces = preparation_traces or []
-    if any(t.observation_id not in {r.record_id for r in test} for t in traces):
-        raise ValueError("preparation trace does not belong to the frozen test partition")
+    _validate_preparation_join(test, traces)
     return {
         "report_version": "cu-pilot-resource-evaluation-v1",
         "source": rows[0].source,
@@ -441,6 +492,12 @@ def evaluate_resources(
             "selected": sum(controls),
             "paired_scored": len(selected_pairs),
             "joint_exceedances": control_failures,
+            "known_resource_excesses": control_state.known_resource_excesses,
+            "failed_or_incomplete": control_state.failed_or_incomplete,
+            "final_failure_streak": control_state.failure_streak,
+            "max_control_failure_streak": max_control_failure_streak,
+            "suspension_reason": control_state.suspension_reason,
+            "state_scope": "single_evaluated_profile_revision",
             "descriptive_upper_bound": wilson_upper_bound(control_failures, len(selected_pairs))
             if selected_pairs
             else None,

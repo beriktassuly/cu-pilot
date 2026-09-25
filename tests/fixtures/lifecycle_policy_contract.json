@@ -1,0 +1,20 @@
+{
+  "freshness_cases": [
+    {"seconds": 0.5, "age": 0, "valid": true, "fresh": true},
+    {"seconds": 0.5, "age": 0.5, "valid": true, "fresh": true},
+    {"seconds": 0.5, "age": 0.5001, "valid": true, "fresh": false},
+    {"seconds": 1.5, "age": 1.5, "valid": true, "fresh": true},
+    {"seconds": 1.5, "age": 1.5001, "valid": true, "fresh": false},
+    {"seconds": 60, "age": 60, "valid": true, "fresh": true},
+    {"seconds": 3600, "age": 3600, "valid": true, "fresh": true},
+    {"seconds": 3600, "age": 3600.0001, "valid": true, "fresh": false},
+    {"seconds": 0, "age": 0, "valid": false},
+    {"seconds": -0.5, "age": 0, "valid": false},
+    {"seconds": 3600.1, "age": 0, "valid": false}
+  ],
+  "control_cases": [
+    {"threshold": 1, "success": [false], "suspended": [true]},
+    {"threshold": 3, "success": [false, false, false], "suspended": [false, false, true]},
+    {"threshold": 3, "success": [false, true, false, false, false], "suspended": [false, false, false, false, true]}
+  ]
+}

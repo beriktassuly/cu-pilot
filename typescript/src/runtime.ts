@@ -54,6 +54,7 @@ export type ReleaseSnapshot = {
     max_deployment_age_slots: number;
     max_deployment_age_seconds: number;
     control_probability: number;
+    max_control_failure_streak: number;
   };
   deployments: {
     program_id: string;
@@ -96,11 +97,15 @@ export function releaseRisk(
     return "synthetic_release_forbidden";
   if (
     !m ||
-    ![
-      m.max_observation_age_slots,
-      m.max_deployment_age_slots,
-      m.max_deployment_age_seconds,
-    ].every((n) => Number.isSafeInteger(n) && n >= 0) ||
+    ![m.max_observation_age_slots, m.max_deployment_age_slots].every(
+      (n) => Number.isSafeInteger(n) && n >= 0,
+    ) ||
+    !Number.isFinite(m.max_deployment_age_seconds) ||
+    m.max_deployment_age_seconds <= 0 ||
+    m.max_deployment_age_seconds > 3600 ||
+    !Number.isSafeInteger(m.max_control_failure_streak) ||
+    m.max_control_failure_streak < 1 ||
+    m.max_control_failure_streak > 2 ** 32 - 1 ||
     !Number.isFinite(m.control_probability) ||
     m.control_probability < 0 ||
     m.control_probability > 1
@@ -215,7 +220,9 @@ export type EstimateOptions = RuntimeContext & {
   onControl?: (event: ControlObservation) => void | Promise<void>;
 };
 export type SimulationObservation = {
-  status: "success" | "failed";
+  // Incomplete means RPC err:null but at least one required measurement is
+  // missing/invalid. Valid individual measurements remain control evidence.
+  status: "success" | "incomplete" | "failed";
   reason: string;
   slot: string | null;
   computeUnits: number | null;
@@ -255,6 +262,7 @@ export type ResourceDecision = {
   simulation: SimulationObservation | null;
   controlSelected: boolean;
   controlProbability: number;
+  maxControlFailureStreak: number | null;
   provenance: "local-profile" | "simulation" | "unresolved";
   preflightPolicy: "caller-owned";
 };
@@ -356,27 +364,30 @@ async function simulate(
         };
       const cu = value.unitsConsumed,
         data = value.loadedAccountsDataSize;
-      if (
-        typeof cu !== "bigint" ||
-        cu < 0n ||
-        cu > BigInt(MAX_CU) ||
-        typeof data !== "number" ||
-        !Number.isSafeInteger(data) ||
-        data < 0 ||
-        data > MAX_DATA
-      )
+      const computeUnits =
+        typeof cu === "bigint" && cu >= 0n && cu <= BigInt(MAX_CU)
+          ? Number(cu)
+          : null;
+      const loadedAccountsBytes =
+        typeof data === "number" &&
+        Number.isSafeInteger(data) &&
+        data >= 0 &&
+        data <= MAX_DATA
+          ? data
+          : null;
+      if (computeUnits === null || loadedAccountsBytes === null)
         return {
-          status: "failed",
+          status: "incomplete",
           reason: "missing_or_invalid_measurement",
-          computeUnits: null,
-          loadedAccountsBytes: null,
+          computeUnits,
+          loadedAccountsBytes,
           ...base,
         };
       return {
         status: "success",
         reason: "measured_resources",
-        computeUnits: Number(cu),
-        loadedAccountsBytes: data,
+        computeUnits,
+        loadedAccountsBytes,
         ...base,
       };
     } catch (error) {
@@ -453,6 +464,7 @@ export async function estimateResources(
     simulation: null,
     controlSelected: false,
     controlProbability: 0,
+    maxControlFailureStreak: null,
     provenance: "unresolved",
     preflightPolicy: "caller-owned",
   };
@@ -529,6 +541,9 @@ export async function estimateResources(
     d.controlProbability = eligible
       ? (options.release?.manifest.control_probability ?? 0)
       : 0;
+    d.maxControlFailureStreak = eligible
+      ? options.release!.manifest.max_control_failure_streak
+      : null;
     if (
       !Number.isFinite(d.controlProbability) ||
       d.controlProbability < 0 ||
@@ -582,10 +597,12 @@ export async function estimateResources(
           prediction: d.prediction,
           simulation: d.simulation,
           resourceExcess:
-            d.simulation.status === "success" &&
-            (d.simulation.computeUnits! > d.prediction.compute_unit_limit! ||
-              d.simulation.loadedAccountsBytes! >
-                d.prediction.loaded_accounts_data_size_limit!),
+            d.simulation.status !== "failed" &&
+            ((d.simulation.computeUnits !== null &&
+              d.simulation.computeUnits > d.prediction.compute_unit_limit!) ||
+              (d.simulation.loadedAccountsBytes !== null &&
+                d.simulation.loadedAccountsBytes >
+                  d.prediction.loaded_accounts_data_size_limit!)),
         };
         await options.controlStore!.recordOutcome(structuredClone(event));
         await options.onControl?.(structuredClone(event));
@@ -636,6 +653,8 @@ export async function estimateResources(
       "invalid_rpc_policy",
       "invalid_control_policy",
       "invalid_control_draw",
+      "incompatible_control_failure_policy",
+      "incompatible_control_journal",
       "missing_lookup_evidence",
     ]);
     d.status = "unresolved";

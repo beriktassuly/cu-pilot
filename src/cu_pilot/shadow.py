@@ -33,6 +33,7 @@ from cu_pilot.integration import (
     ResourceDecision,
     execute_decision,
     prepare_decision,
+    record_control_outcome,
 )
 from cu_pilot.resource_evaluation import PreparationTrace
 from cu_pilot.resources import ResourceEstimator
@@ -152,7 +153,41 @@ class ObservationStore:
         result = dict(row)
         for key in ("input", "plan", "result"):
             result[key] = json.loads(result[key]) if result[key] is not None else None
+        # Derive on reads too, so older databases with a last-attempt summary do
+        # not require rewriting any audit events or a schema migration.
+        result["outcome"] = self._aggregate_outcome(identifier)
         return result
+
+    def _aggregate_outcome(self, identifier: str) -> str:
+        """Strongest current commitment evidence, not success of all retries.
+
+        Only the latest recorded revision for each signature is current. Failed
+        finalized execution still constitutes finalized evidence; success/error
+        and other pending retries remain explicit in the per-attempt records.
+        """
+        rank = {
+            "missing": 0,
+            "unavailable": 1,
+            "pending": 2,
+            "pending_finality": 3,
+            "confirmed": 4,
+            "finalized": 5,
+        }
+        aggregate = "missing"
+        for row in self.db.execute(
+            "SELECT s.commitment, o.body FROM signatures s "
+            "LEFT JOIN outcomes o ON o.id=("
+            "SELECT latest.id FROM outcomes latest WHERE latest.signature=s.signature "
+            "ORDER BY latest.id DESC LIMIT 1) WHERE s.observation_id=?",
+            (identifier,),
+        ):
+            body = json.loads(row["body"]) if row["body"] is not None else None
+            status = body["status"] if body is not None else "pending"
+            if status == "confirmed" and row["commitment"] == "finalized":
+                status = "pending_finality"
+            if rank[status] > rank[aggregate]:
+                aggregate = status
+        return aggregate
 
     def freeze_plan(self, identifier: str, plan: dict[str, Any]) -> None:
         payload = _json(plan)
@@ -294,6 +329,10 @@ class ObservationStore:
                     final[0],
                 )
                 slot, label = outcome["slot"], ResourceLabel.model_validate(outcome["label"])
+            # Preparation provenance belongs to the original request, including
+            # when its label is later reconciled from real execution. Manual
+            # ingestion without a persisted trace must not invent collection mode.
+            trace = record["preparation_trace"] or {}
             yield Observation(
                 record_id=plan.observation_id,
                 slot=slot,
@@ -303,6 +342,8 @@ class ObservationStore:
                 evidence_origin=cast(
                     Literal["synthetic", "local-runtime", "live-simulation"], evidence_origin
                 ),
+                collection_method=trace.get("collection_method"),
+                collection_mode=trace.get("mode"),
                 features=plan.features,
                 label=label,
             )
@@ -354,24 +395,23 @@ class ObservationStore:
             raise ValueError("invalid signatures for the final message")
         signature = str(signed.signatures[0])
         with self.db:
-            changed = self.db.execute(
+            self.db.execute(
                 "INSERT OR IGNORE INTO signatures VALUES(?,?,?,?)",
                 (signature, identifier, signed_wire_base64, commitment),
-            ).rowcount
-        row = self.db.execute("SELECT * FROM signatures WHERE signature=?", (signature,)).fetchone()
-        if (
-            row["observation_id"] != identifier
-            or row["wire"] != signed_wire_base64
-            or row["commitment"] != commitment
-        ):
-            self._conflict(identifier, "signature", signed_wire_base64)
-        if changed:
-            with self.db:
-                self.db.execute(
-                    "UPDATE observations SET outcome='pending' WHERE id=? "
-                    "AND outcome NOT IN ('confirmed','finalized')",
-                    (identifier,),
-                )
+            )
+            row = self.db.execute(
+                "SELECT * FROM signatures WHERE signature=?", (signature,)
+            ).fetchone()
+            if (
+                row["observation_id"] != identifier
+                or row["wire"] != signed_wire_base64
+                or row["commitment"] != commitment
+            ):
+                self._conflict(identifier, "signature", signed_wire_base64)
+            self.db.execute(
+                "UPDATE observations SET outcome=? WHERE id=?",
+                (self._aggregate_outcome(identifier), identifier),
+            )
         return signature
 
     def reconcile(
@@ -458,13 +498,7 @@ class ObservationStore:
                 "INSERT OR IGNORE INTO outcomes VALUES(NULL,?,?,?,?)",
                 (signature, encoded, hashlib.sha256(encoded.encode()).hexdigest(), time.time()),
             )
-            status = body["status"]
-            if (
-                commitment == "confirmed"
-                and row["commitment"] == "finalized"
-                and status != "unavailable"
-            ):
-                status = "pending_finality"
+            status = self._aggregate_outcome(row["observation_id"])
             self.db.execute(
                 "UPDATE observations SET outcome=? WHERE id=?", (status, row["observation_id"])
             )
@@ -487,20 +521,8 @@ def collect_shadow(
         raise ValueError("collection bound must be between 1 and 100000")
 
     def audit_control(result: dict[str, Any]) -> None:
-        if registry is None or result.get("plan") is None:
-            return
-        frozen = DecisionPlan.model_validate(result["plan"])
-        if not frozen.control_selected:
-            return
-        simulation = result.get("simulation")
-        registry.record_control(
-            frozen.observation_id,
-            success=simulation is not None,
-            compute_units=simulation["units_consumed"] if simulation else None,
-            loaded_accounts_bytes=simulation["loaded_accounts_bytes"] if simulation else None,
-            current_slot=simulation["slot"] if simulation else frozen.context.current_slot,
-            elapsed_ms=simulation["elapsed_ms"] if simulation else result["full_preparation_ms"],
-        )
+        if registry is not None:
+            record_control_outcome(ResourceDecision.model_validate(result), registry)
 
     completed = unresolved = resumed = 0
     # Re-read to detect conflicting IDs; reordering is safe because deduplication

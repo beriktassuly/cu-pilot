@@ -60,6 +60,8 @@ Read [integration and collection](docs/integration.md), [joint resource model](d
 [real local runtime tests](docs/local-runtime.md) for complete commands and limitations.
 The [verification report](docs/verification.md) records test results, measured costs,
 and the remaining production-validation boundary.
+The [review corrections](docs/review-corrections.md) document policy consistency
+fixes and the TypeScript control-journal compatibility change.
 
 `cu-pilot estimate-resources transaction.base64 --context context.json` uses the endpoint in
 `CU_PILOT_RPC_URL` and returns `accepted_prediction`, `simulation_success`, or `unresolved`.

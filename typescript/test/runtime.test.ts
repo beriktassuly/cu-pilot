@@ -106,6 +106,7 @@ function setup() {
       max_deployment_age_slots: 100,
       max_deployment_age_seconds: 60,
       control_probability: 0,
+      max_control_failure_streak: 3,
     },
     deployments: programs.map((p) => ({
       program_id: p,
@@ -212,6 +213,72 @@ test("stale watcher/dependency/release gates fail closed without changing artifa
     releaseRisk(bad, artifact, bound, context),
     "invalid_release_policy",
   );
+});
+test("shared fractional freshness boundaries match Python release policy", () => {
+  const cases = JSON.parse(
+    readFileSync("../tests/fixtures/lifecycle_policy_contract.json", "utf8"),
+  ).freshness_cases;
+  for (const { seconds, age, valid, fresh } of cases) {
+    for (const source of ["snapshot", "deployment"]) {
+      const { artifact, release } = setup();
+      release.manifest.max_deployment_age_seconds = seconds;
+      release.exported_at = 1000;
+      for (const deployment of release.deployments)
+        deployment.checked_at = source === "deployment" ? 1000 - age : 1000;
+      const result = releaseRisk(
+        release,
+        artifact,
+        bound,
+        context,
+        source === "snapshot" ? 1000 + age : 1000,
+      );
+      assert.equal(
+        result,
+        !valid
+          ? "invalid_release_policy"
+          : fresh
+            ? null
+            : source === "snapshot"
+              ? "stale_release_snapshot"
+              : "stale_deployment_evidence",
+      );
+    }
+  }
+  for (const seconds of [NaN, Infinity, -Infinity, "0.5", null, true]) {
+    const { artifact, release } = setup();
+    release.manifest.max_deployment_age_seconds = seconds as number;
+    assert.equal(
+      releaseRisk(release, artifact, bound, context),
+      "invalid_release_policy",
+    );
+  }
+});
+
+test("released control failure threshold is required and has Python integer bounds", () => {
+  for (const threshold of [
+    undefined,
+    null,
+    true,
+    0,
+    -1,
+    1.5,
+    2 ** 32,
+    "3",
+    NaN,
+    Infinity,
+  ]) {
+    const { artifact, release } = setup();
+    release.manifest.max_control_failure_streak = threshold as number;
+    assert.equal(
+      releaseRisk(release, artifact, bound, context),
+      "invalid_release_policy",
+    );
+  }
+  for (const threshold of [1, 3, 2 ** 32 - 1]) {
+    const { artifact, release } = setup();
+    release.manifest.max_control_failure_streak = threshold;
+    assert.equal(releaseRisk(release, artifact, bound, context), null);
+  }
 });
 test("missing labels, deterministic failures and cap excess stay unresolved", async () => {
   for (const [response, reason] of [
@@ -351,8 +418,8 @@ test("asynchronous caller mutation cannot change the final instruction bytes", a
   );
 });
 
-test("asynchronous audit persistence rechecks expiry and quarantine before acceptance", async () => {
-  for (const scenario of ["expiry", "quarantine"] as const) {
+test("asynchronous audit persistence rechecks expiry, release policy and quarantine before acceptance", async () => {
+  for (const scenario of ["expiry", "policy", "quarantine"] as const) {
     const { artifact, release } = setup();
     let suspended = false;
     const store: ControlStore = {
@@ -362,6 +429,8 @@ test("asynchronous audit persistence rechecks expiry and quarantine before accep
         // Mutating the sink's copy must not mutate the pending result.
         decision.prediction!.compute_unit_limit = 1;
         if (scenario === "expiry") release.exported_at -= 120;
+        else if (scenario === "policy")
+          release.manifest.max_control_failure_streak = 1;
         else suspended = true;
         await Promise.resolve();
       },
@@ -379,9 +448,9 @@ test("asynchronous audit persistence rechecks expiry and quarantine before accep
     assert.notEqual(result.prediction!.compute_unit_limit, 1);
     assert.equal(
       result.reason,
-      scenario === "expiry"
-        ? "release_changed_during_preparation"
-        : "profile_quarantined",
+      scenario === "quarantine"
+        ? "profile_quarantined"
+        : "release_changed_during_preparation",
     );
   }
 });
