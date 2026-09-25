@@ -148,6 +148,14 @@ def test_learned_state_quantiles_use_real_label_parameters_and_reuse_core(tmp_pa
     assert bundle.diagnostics["fit_count"] == 30
     assert bundle.diagnostics["calibration_count"] == 18
     assert bundle.diagnostics["holdout_count"] == 12
+    for cell in bundle.models:
+        actual_min = min(
+            row.observation.slot
+            for row in observations
+            if row.state.state_key == cell
+            and row.record_id in bundle.split.fit_ids + bundle.split.calibration_ids
+        )
+        assert bundle.diagnostics["cell_evidence_min_slots"][cell] == str(actual_min)
     low = bundle.predict(state(20), features(), current_slot=200, deployment_bindings=DEPLOYMENTS)
     high = bundle.predict(
         state(20, 2), features(), current_slot=200, deployment_bindings=DEPLOYMENTS
@@ -510,6 +518,80 @@ def test_bundle_rejects_misreported_cell_policy() -> None:
         PayoutModelBundle.model_validate(payload)
 
 
+def test_bundle_requires_valid_earliest_evidence_metadata() -> None:
+    bundle = fit_bundle(rows(), policy=POLICY)
+    payload = bundle.model_dump(mode="json")
+    chosen = next(iter(payload["models"]))
+    payload["diagnostics"]["cell_evidence_min_slots"][chosen] = str(
+        bundle.models[chosen].training_max_slot + 1
+    )
+    with pytest.raises(ValidationError, match="must not follow"):
+        PayoutModelBundle.model_validate(payload)
+    del payload["diagnostics"]["cell_evidence_min_slots"][chosen]
+    with pytest.raises(ValidationError, match="every fitted cell"):
+        PayoutModelBundle.model_validate(payload)
+
+
+def test_capacity_sensitivity_only_describes_paired_holdout_without_retuning() -> None:
+    observations = rows()
+    bundle = fit_bundle(observations, policy=POLICY)
+    original_digest = bundle.digest
+    holdout_ids = bundle.split.holdout_ids
+    changed_labels = dict(
+        zip(
+            holdout_ids,
+            [
+                ResourceLabel(success=True, compute_units=200000, loaded_accounts_bytes=4000),
+                ResourceLabel(success=True, compute_units=10000, loaded_accounts_bytes=1048577),
+                ResourceLabel(success=True, compute_units=2000),
+                ResourceLabel(success=False, compute_units=2000, loaded_accounts_bytes=4000),
+            ],
+            strict=False,
+        )
+    )
+    changed = [
+        row.model_copy(
+            update={
+                "observation": row.observation.model_copy(
+                    update={"label": changed_labels[row.record_id]}
+                )
+            }
+        )
+        if row.record_id in changed_labels
+        else row
+        for row in observations
+    ]
+    sensitivity = evaluate_bundle(bundle, changed)["capacity_sensitivity"]
+    assert sensitivity["holdout_rows"] == 12
+    assert sensitivity["successful_paired_labels"] == 10
+    assert sensitivity["failed_or_unpaired_rows"] == 2
+    assert sensitivity["declared_policy"]["compute_cap"] == 100000
+    assert sensitivity["declared_policy"]["within_both"] == 8
+    assert sensitivity["protocol_compute_ceiling"]["compute_cap"] == 1400000
+    assert sensitivity["protocol_compute_ceiling"]["within_both"] == 9
+    assert sensitivity["by_candidate_count"]["2"]["maximum_observed_compute_units"] == 200000
+    assert sensitivity["all_observed_count8_pairs_fit_protocol_ceiling"] is None
+    assert bundle.digest == original_digest
+    assert fit_bundle(changed, policy=POLICY).digest == original_digest
+
+
+def test_prefunded_system_ata_state_cannot_receive_a_missing_ata_profile() -> None:
+    absent = state(20, missing=1)
+    accounts = list(absent.recipient_accounts)
+    accounts[0] = accounts[0].model_copy(
+        update={"program_owner": "11111111111111111111111111111111"}
+    )
+    prefunded = PayoutStateEnvelope.seal(**{**absent.model_dump(), "recipient_accounts": accounts})
+    assert prefunded.risk(current_slot=200, deployment_bindings=DEPLOYMENTS) == (
+        "unsupported_recipient_state"
+    )
+    bundle = fit_bundle(rows(), policy=POLICY)
+    prediction = bundle.predict(
+        prefunded, features(), current_slot=200, deployment_bindings=DEPLOYMENTS
+    )
+    assert prediction.simulation_recommended
+
+
 def test_baseline_fitting_requires_unchanged_frozen_development_records() -> None:
     observations = rows()
     bundle = fit_bundle(observations, policy=POLICY)
@@ -581,6 +663,12 @@ def test_explicit_qualification_reuses_registry_and_quarantine(tmp_path: Path) -
         bundle, registry, deployments=deployments, dependencies=dependencies, current_slot=200
     )
     assert report["active_count"] == 3
+    for cell in bundle.models:
+        manifest, _, _ = registry.active_snapshot(bundle.profile_id(cell))
+        assert manifest.evidence_min_slot == int(
+            bundle.diagnostics["cell_evidence_min_slots"][cell]
+        )
+        assert manifest.evidence_min_slot < bundle.models[cell].training_max_slot
     assert (
         qualify_bundle(
             bundle, registry, deployments=deployments, dependencies=dependencies, current_slot=200

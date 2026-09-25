@@ -13,10 +13,12 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const ATA = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 export const SYSTEM = '11111111111111111111111111111111';
+const CLOCK = 'SysvarC1ock11111111111111111111111111111111';
 export const PROGRAM = kit.getAddressDecoder().decode(createHash('sha256').update('cu-pilot-payout-queue-v1').digest());
 export const BUDGET = 'ComputeBudget111111111111111111111111111111';
 const LOADER = 'BPFLoaderUpgradeab1e11111111111111111111111';
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
+export const elfDigest = bytes => createHash('sha256').update(bytes).digest('hex');
 function fixtureRecipient(seed,index){
   const bytes=createHash('sha256').update(`${seed}:${index}`).digest();
   const key=createPrivateKey({key:Buffer.concat([Buffer.from('302e020100300506032b657004220420','hex'),bytes]),format:'der',type:'pkcs8'});
@@ -45,15 +47,19 @@ export async function executeInstruction({executor,queue,vault,mint,cursor,count
 export class LocalRuntime {
   static async start(options={}) {
     const runtime=new LocalRuntime();
+    runtime.allowTestMutations=options.allowTestMutations===true;
     runtime.surf=Surfnet.startWithConfig({offline:true,blockProductionMode:'transaction'});
+    // Native runtime events use a bounded channel; drain even while the worker is idle.
+    runtime.eventPump=setInterval(()=>runtime.surf.drainEvents(),50);
+    runtime.eventPump.unref();
     runtime.surf.timeTravelToSlot(100);
     runtime.rpc=kit.createSolanaRpc(runtime.surf.rpcUrl);
-    runtime.keys=new Map(); runtime.queues=new Map(); runtime.calls=0; runtime.mutations=0;
+    runtime.keys=new Map(); runtime.queues=new Map(); runtime.calls=0; runtime.methodCounts={}; runtime.mutations=0;
     runtime.owner=await runtime.newSigner(); runtime.executor=await runtime.newSigner(); runtime.mint=await runtime.newSigner();
     runtime.surf.fundSol(runtime.owner,20_000_000_000);
     runtime.surf.fundSol(runtime.executor,100_000_000); // Separate, bounded test SOL allowance.
     const so=options.so??resolve(ROOT,'programs/payout_queue/target/deploy/payout_queue.so');
-    runtime.elf_digest=digest(readFileSync(so));
+    runtime.elf_digest=elfDigest(readFileSync(so));
     runtime.surf.deploy({programId:PROGRAM,soPath:so});
     runtime.local_dependency_installations=[];
     // Bundled programs are installed locally. Preserve code and authority while
@@ -70,7 +76,7 @@ export class LocalRuntime {
       if(bytes.length<45||bytes.readUInt32LE(0)!==3)throw Error('invalid_dependency_header');
       const originalSlot=bytes.readBigUInt64LE(4);bytes.writeBigUInt64LE(100n,4);
       runtime.surf.setAccount(programData,Number(account.value.lamports),Uint8Array.from(bytes),LOADER);
-      runtime.local_dependency_installations.push({program,program_data:programData,original_deployment_slot:originalSlot.toString(),local_installation_slot:100,elf_digest:digest(bytes.subarray(45)),fixture:'bundled dependency local installation header'});
+      runtime.local_dependency_installations.push({program,program_data:programData,original_deployment_slot:originalSlot.toString(),local_installation_slot:100,elf_digest:elfDigest(bytes.subarray(45)),fixture:'bundled dependency local installation header'});
     }
     const rent=await runtime.call('getMinimumBalanceForRentExemption',82);
     const sys={programAddress:kit.address(SYSTEM),accounts:[meta(runtime.owner,3),meta(runtime.mint,3)],data:Buffer.concat([Buffer.alloc(4),u64(rent),u64(82),addressBytes(TOKEN)])};
@@ -80,7 +86,8 @@ export class LocalRuntime {
     await runtime.sendInstructions([runtime.ataInstruction(runtime.owner,runtime.owner),{programAddress:kit.address(TOKEN),accounts:[meta(runtime.mint,1),meta(runtime.source,1),meta(runtime.owner,2)],data:Buffer.concat([Buffer.from([7]),u64(1_000_000_000_000_000n)])}],runtime.owner);
     return runtime;
   }
-  async call(method,...args) {this.calls++;return this.rpc[method](...args).send();}
+  async call(method,...args) {this.calls++;this.methodCounts[method]=(this.methodCounts[method]??0)+1;return this.rpc[method](...args).send();}
+  measurementsSince(calls,methods,started){return {bridge_rpc_calls:this.calls-calls,bridge_rpc_methods:Object.fromEntries(Object.entries(this.methodCounts).map(([method,count])=>[method,count-(methods[method]??0)]).filter(([,count])=>count>0)),bridge_ms:performance.now()-started};}
   async newSigner() { const raw=Surfnet.newKeypair();const key=await kit.createKeyPairFromBytes(Uint8Array.from(raw.secretKey));this.keys.set(raw.publicKey,key);return raw.publicKey; }
   ataInstruction(payer,recipient) {return {programAddress:kit.address(ATA),accounts:[meta(payer,3),meta(this.surf.getAta(recipient,this.mint),1),meta(recipient),meta(this.mint),meta(SYSTEM),meta(TOKEN)],data:Buffer.from([1])};}
   async build(instructions,payer=this.executor,knownLifetime) {
@@ -98,6 +105,7 @@ export class LocalRuntime {
   async transaction(signature) {return this.call('getTransaction',kit.signature(signature),{encoding:'base64',commitment:'confirmed',maxSupportedTransactionVersion:1});}
   async sendInstructions(instructions,payer=this.executor,signers=[payer]) {const b=await this.build(instructions,payer);const signed=await this.sign(b.wireBase64,signers);const result=await this.submit(signed.wire);if(!result.transaction||result.transaction.meta.err)throw Error('local_transaction_failed:'+json({error:result.transaction?.meta.err,logs:result.transaction?.meta.logMessages}));return result;}
   async account(address) { const {context,value}=await this.call('getAccountInfo',kit.address(address),{encoding:'base64',commitment:'confirmed'});return {slot:Number(context.slot),value}; }
+  async chainTime() {const clock=await this.account(CLOCK);const bytes=Buffer.from(clock.value?.data[0]??'','base64');if(bytes.length!==40)throw Error('invalid_clock_sysvar');const timestamp=Number(bytes.readBigInt64LE(32));if(!Number.isSafeInteger(timestamp)||timestamp<=0)throw Error('invalid_clock_timestamp');return timestamp;}
   async queue(address) {const a=await this.account(address);if(a.value?.owner!==PROGRAM)throw Error('wrong_queue_owner');return {...decodeQueue(Buffer.from(a.value.data[0],'base64')),address,slot:a.slot,vault:await ata(address,this.mint)};}
   async create(options={}) {
     const length=options.length??16;if(!Number.isInteger(length)||length<1||length>16)throw Error('invalid_length');
@@ -113,8 +121,18 @@ export class LocalRuntime {
     }
     const payments=requestedPayments??await Promise.all(Array.from({length},async(_,i)=>({recipient:await this.newSigner(),amount:String((i+1)*1000)})));
     const existing=options.existing??0;
+    if(!Array.isArray(payments)||payments.length<1||payments.length>16||!Number.isInteger(existing)||existing<0||existing>payments.length)throw Error('invalid_payment_or_existing_account_count');
+    const recipientAtas=await Promise.all(payments.map(payment=>ata(payment.recipient,this.mint)));
+    const {value:recipientAccounts}=await this.call('getMultipleAccounts',recipientAtas,{encoding:'base64',commitment:'confirmed'});
+    for(let i=0;i<recipientAccounts.length;i++){
+      const account=recipientAccounts[i];if(!account)continue;
+      const data=Buffer.from(account.data[0],'base64');
+      if(account.owner===SYSTEM&&data.length===0&&!account.executable)continue;
+      if(account.owner!==TOKEN||data.length!==165||account.executable||data[108]!==1||!data.subarray(0,32).equals(addressBytes(this.mint))||!data.subarray(32,64).equals(addressBytes(payments[i].recipient)))throw Error('Recipient token account is unsupported; no queue was funded.');
+      if(data.readBigUInt64LE(64)!==0n)throw Error('Use a fresh recipient with a zero token balance; no queue was funded.');
+    }
     for(let i=0;i<existing;i++)await this.sendInstructions([this.ataInstruction(this.owner,payments[i].recipient)],this.owner);
-    const expiry=options.expiry??Math.floor(Date.now()/1000)+86400;
+    const expiry=options.expiry??(await this.chainTime())+86400;
     const ix=createInstruction({owner:this.owner,queue,vault,mint:this.mint,source:this.source,executor:this.executor,id,expiry,payments});
     const result=await this.sendInstructions([ix],this.owner);
     this.queues.set(queue,{payments,created_signature:result.signature});
@@ -136,7 +154,7 @@ export class LocalRuntime {
     const mint_initialized=evidence[2].owner===TOKEN&&mintData.length===82&&mintData[45]===1;
     const vault_unencumbered=vaultData.length===165&&vaultData.readUInt32LE(72)===0&&vaultData.readUInt32LE(129)===0;
     let supported=!fresh.paused&&fresh.status===0&&vault_initialized&&!vault_frozen&&vault_unencumbered&&mint_initialized&&!evidence[1].executable&&!evidence[2].executable;
-    const states=recipientAccounts.map((a,i)=>{if(a.size===0&&a.owner===SYSTEM&&!a.executable)return 'missing';const b=Buffer.from(a.data,'base64');const valid=a.owner===TOKEN&&a.size===165&&!a.executable&&b.subarray(0,32).equals(addressBytes(q.mint))&&b.subarray(32,64).equals(addressBytes(recipients[i].recipient))&&b[108]===1;if(!valid)supported=false;return valid?'initialized':'unsupported';});
+    const states=recipientAccounts.map((a,i)=>{if(a.size===0&&a.owner===SYSTEM&&!a.executable&&a.lamports===0)return 'missing';const b=Buffer.from(a.data,'base64');const valid=a.owner===TOKEN&&a.size===165&&!a.executable&&b.subarray(0,32).equals(addressBytes(q.mint))&&b.subarray(32,64).equals(addressBytes(recipients[i].recipient))&&b[108]===1;if(!valid)supported=false;return valid?'initialized':'unsupported';});
     for(const wallet of evidence.slice(3,3+count))if(wallet.owner!==SYSTEM||wallet.size!==0||wallet.executable)supported=false;
     const slot=Number(context.slot);
     return {queue:{...fresh,address,slot,vault:q.vault},count,slot,missing_atas:states.filter(s=>s==='missing').length,existing_atas:states.filter(s=>s==='initialized').length,account_sizes:evidence.map(a=>a.size),ata_states:states,vault_initialized,vault_frozen,vault_unencumbered,mint_initialized,supported,evidence,snapshot_digest:digest(evidence),state_reads:this.calls-calls,snapshot_ms:performance.now()-started};
@@ -163,13 +181,50 @@ export class LocalRuntime {
     const {value}=await this.call('getMultipleAccounts',[kit.address(q.vault),...atas],{encoding:'base64',commitment:'confirmed'});
     const amounts=value.map(a=>a?Buffer.from(a.data[0],'base64').readBigUInt64LE(64).toString():'0');
     const expectedVault=q.status===2?'0':(BigInt(q.total)-BigInt(q.total_paid)).toString();
-    return {queue:q,vault_balance:amounts[0],balances:q.payments.map((p,i)=>({...p,ata:atas[i],balance:amounts[i+1],paid:i<q.cursor})),correct:q.paid_count===q.cursor&&amounts[0]===expectedVault&&q.payments.every((p,i)=>amounts[i+1]===(i<q.cursor?p.amount:'0')),duplicate_count:q.payments.filter((p,i)=>BigInt(amounts[i+1])>BigInt(p.amount)).length};
+    return {queue:q,vault_balance:amounts[0],balances:q.payments.map((p,i)=>({...p,ata:atas[i],balance:amounts[i+1],ata_exists:value[i+1]!==null,paid:i<q.cursor})),correct:q.paid_count===q.cursor&&amounts[0]===expectedVault&&q.payments.every((p,i)=>amounts[i+1]===(i<q.cursor?p.amount:'0')),duplicate_count:q.payments.filter((p,i)=>BigInt(amounts[i+1])>BigInt(p.amount)).length};
   }
   async pause(queue,paused) {await this.sendInstructions([{programAddress:PROGRAM,accounts:[meta(this.owner,2),meta(queue,1)],data:Buffer.concat([instructionTag(2),Buffer.from([paused?1:0])])}],this.owner);return this.verify(queue);}
+  async prepareDependencyUpgradeFixture(){
+    if(!this.allowTestMutations)throw Error('test_fixture_not_enabled');
+    if(this.upgradeFixture)throw Error('upgrade_fixture_already_prepared');
+    const program=await this.account(TOKEN),header=Buffer.from(program.value.data[0],'base64');
+    if(program.value.owner!==LOADER||header.length!==36||header.readUInt32LE(0)!==2)throw Error('invalid_token_program');
+    const programData=kit.getAddressDecoder().decode(header.subarray(4,36));
+    const account=await this.account(programData),bytes=Buffer.from(account.value.data[0],'base64');
+    if(account.value.owner!==LOADER||bytes.readUInt32LE(0)!==3)throw Error('invalid_token_program_data');
+    // A disclosed emulator setup step, performed before every training observation.
+    // The subsequent deployment change is a real signed Loader-v3 instruction.
+    bytes[12]=1;addressBytes(this.owner).copy(bytes,13);
+    this.surf.setAccount(programData,Number(account.value.lamports),Uint8Array.from(bytes),LOADER);
+    const elf=bytes.subarray(45),bufferAddress=await this.newSigner(),buffer=Buffer.alloc(37+elf.length);
+    buffer.writeUInt32LE(1);buffer[4]=1;addressBytes(this.owner).copy(buffer,5);elf.copy(buffer,37);
+    this.surf.setAccount(bufferAddress,1_000_000_000,Uint8Array.from(buffer),LOADER);
+    this.upgradeFixture={programData,bufferAddress,elf:Buffer.from(elf),oldSlot:bytes.readBigUInt64LE(4)};
+    const programDataAccounts=[];
+    for(const address of [PROGRAM,TOKEN,ATA]){
+      const {value}=await this.account(address);
+      if(value.owner===LOADER){const data=Buffer.from(value.data[0],'base64');programDataAccounts.push(kit.getAddressDecoder().decode(data.subarray(4,36)));}
+    }
+    return {program_data_accounts:programDataAccounts,elf_bytes:elf.length,dependency_elf_sha256:elfDigest(elf),fixture:'local upgrade authority and buffer seeded before collection',program:PROGRAM,dependency:TOKEN,ata:ATA,system:SYSTEM,budget:BUDGET};
+  }
+  async upgradeDependency(){
+    if(!this.allowTestMutations||!this.upgradeFixture)throw Error('test_fixture_not_enabled');
+    const fixture=this.upgradeFixture,loader=await import(require.resolve('@solana-program/loader-v3'));
+    const signer=await kit.createSignerFromKeyPair(this.keys.get(this.owner));
+    const ix=loader.getUpgradeInstruction({programDataAccount:fixture.programData,programAccount:TOKEN,bufferAccount:fixture.bufferAddress,spillAccount:this.owner,authority:signer});
+    const result=await this.sendInstructions([ix],this.owner);
+    const {value}=await this.account(fixture.programData),bytes=Buffer.from(value.data[0],'base64');
+    const newSlot=bytes.readBigUInt64LE(4);
+    if(newSlot<=fixture.oldSlot||!bytes.subarray(45).equals(fixture.elf))throw Error('upgrade_evidence_mismatch');
+    const observed=Number(await this.call('getSlot',{commitment:'confirmed'}));
+    this.surf.timeTravelToSlot(observed+10);
+    return {...result,old_deployment_slot:fixture.oldSlot,new_deployment_slot:newSlot,code_payload_unchanged:true,actual_loader_upgrade:true,instruction_sdk:'@solana-program/loader-v3@0.7.0',current_slot:Number(await this.call('getSlot',{commitment:'confirmed'}))};
+  }
   async dispatch(command) {
-    const calls=this.calls,started=performance.now();let result;
+    this.surf.drainEvents();
+    const calls=this.calls,methods={...this.methodCounts},started=performance.now();let result;
     switch(command.action){
-      case 'info': result={rpc_url:this.surf.rpcUrl,instance_id:this.surf.instanceId,owner:this.owner,executor:this.executor,mint:this.mint,program:PROGRAM,elf_digest:this.elf_digest,runtime:await this.call('getVersion'),slot:Number(await this.call('getSlot')),token_label:'CU Pilot test token',features:'Surfpool 1.5.0 default gates; offline',local_dependency_installations:this.local_dependency_installations};break;
+      case 'info': result={rpc_url:this.surf.rpcUrl,instance_id:this.surf.instanceId,owner:this.owner,executor:this.executor,mint:this.mint,program:PROGRAM,elf_digest:this.elf_digest,runtime:await this.call('getVersion'),slot:Number(await this.call('getSlot',{commitment:'confirmed'})),token_label:'CU Pilot test token',features:'Surfpool 1.5.0 default gates; offline',local_dependency_installations:this.local_dependency_installations};break;
       case 'create': result=await this.create(command);break;
       case 'candidate': result=await this.candidate(command);break;
       case 'candidates': result=await this.candidates(command);break;
@@ -180,13 +235,15 @@ export class LocalRuntime {
       case 'reconcile': result={transaction:await this.transaction(command.signature),verification:await this.verify(command.queue)};break;
       case 'pause': result=await this.pause(command.queue,command.paused);break;
       case 'create_ata': {const q=await this.queue(command.queue);await this.sendInstructions([this.ataInstruction(this.owner,q.payments[command.index].recipient)],this.owner);result=await this.verify(command.queue);break;}
-      case 'balance': result={lamports:Number((await this.call('getBalance',kit.address(this.executor))).value)};break;
+      case 'balance': result={lamports:Number((await this.call('getBalance',kit.address(this.executor),{commitment:'confirmed'})).value)};break;
       case 'reset_allowance': this.surf.setAccount(this.executor,100_000_000,new Uint8Array(),SYSTEM);result={lamports:100_000_000,fixture:'isolated local test allowance reset'};break;
+      case 'test_prepare_dependency_upgrade': result=await this.prepareDependencyUpgradeFixture();break;
+      case 'test_upgrade_dependency': result=await this.upgradeDependency();break;
       default:throw Error('unknown_local_action');
     }
-    return {...result,bridge_rpc_calls:this.calls-calls,bridge_ms:performance.now()-started};
+    return {...result,...this.measurementsSince(calls,methods,started)};
   }
-  close(){this.surf.stop();}
+  close(){clearInterval(this.eventPump);this.surf.stop();}
 }
 async function serve(){
   const runtime=await LocalRuntime.start();const token=randomBytes(32).toString('hex');
@@ -194,7 +251,7 @@ async function serve(){
   const server=createServer((req,res)=>{
     if(req.method!=='POST'||req.headers.authorization!==`Bearer ${token}`){res.writeHead(403).end();return;}
     let body='';req.on('data',chunk=>{body+=chunk;if(body.length>65536)req.destroy();});
-    req.on('end',()=>{chain=chain.then(async()=>{try{const result=await runtime.dispatch(JSON.parse(body));res.writeHead(200,{'Content-Type':'application/json'}).end(json(result));}catch(error){res.writeHead(400,{'Content-Type':'application/json'}).end(json({error:String(error.message).slice(0,500)}));}});});
+    req.on('end',()=>{chain=chain.then(async()=>{const calls=runtime.calls,methods={...runtime.methodCounts},started=performance.now();try{const result=await runtime.dispatch(JSON.parse(body));res.writeHead(200,{'Content-Type':'application/json'}).end(json(result));}catch(error){res.writeHead(400,{'Content-Type':'application/json'}).end(json({error:String(error.message).slice(0,500),...runtime.measurementsSince(calls,methods,started)}));}});});
   });
   server.listen(0,'127.0.0.1',()=>{const path=resolve(process.argv[3]??resolve(ROOT,'artifacts/payouts/runtime.json'));mkdirSync(dirname(path),{recursive:true});writeFileSync(path,json({url:`http://127.0.0.1:${server.address().port}`,token,pid:process.pid,instance_id:runtime.surf.instanceId}),{mode:0o600});console.log(`Isolated payout runtime ready. Private connection file: ${path}`);});
   const stop=()=>server.close(()=>{runtime.close();process.exit(0);});process.on('SIGTERM',stop);process.on('SIGINT',stop);

@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pydantic import Field, StrictBool, StrictInt, model_validator
+from pydantic import Field, StrictBool, StrictInt, TypeAdapter, model_validator
 from solders.pubkey import Pubkey
 
 from cu_pilot.binding import bind_message
@@ -33,7 +33,7 @@ from cu_pilot.resources import (
     ResourcePolicy,
     paired_label,
 )
-from cu_pilot.schemas import Features, Observation, Prediction, StrictModel
+from cu_pilot.schemas import MAX_COMPUTE_UNITS, Features, Observation, Prediction, StrictModel
 
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
@@ -380,6 +380,13 @@ class PayoutModelBundle(StrictModel):
             raise ValueError("state profiles must use the declared bundle policy")
         if self.pattern_p99.policy != self.policy.model_copy(update={"quantile": 0.99}):
             raise ValueError("pattern baseline must use the declared policy with p99")
+        minimum_slots = TypeAdapter(dict[str, PortableSlot]).validate_python(
+            self.diagnostics.get("cell_evidence_min_slots")
+        )
+        if minimum_slots.keys() != self.models.keys():
+            raise ValueError("record the earliest actual evidence slot for every fitted cell")
+        if any(minimum_slots[key] > model.training_max_slot for key, model in self.models.items()):
+            raise ValueError("cell evidence minimum must not follow its fitting observations")
         for model in (*self.models.values(), self.pattern_p99):
             if model.context != self.context:
                 raise ValueError("bundle profiles require one context")
@@ -531,7 +538,7 @@ def qualify_bundle(
             dependencies=dependencies,
             dependency_closure_verified=True,
             budget_independent=True,
-            evidence_min_slot=min(s.training_max_slot for s in model.patterns.values()),
+            evidence_min_slot=int(bundle.diagnostics["cell_evidence_min_slots"][key]),
             evidence_max_slot=model.max_slot,
             provenance=model.source,
             max_observation_age_slots=model.policy.max_age_slots,
@@ -695,6 +702,9 @@ def fit_bundle(
             "fit_count": len(split.fit_ids),
             "calibration_count": len(split.calibration_ids),
             "holdout_count": len(split.holdout_ids),
+            "cell_evidence_min_slots": {
+                key: str(min(row.slot for row in cells[key])) for key in models
+            },
             "unsupported_development_state": dict(unsupported),
             "unfitted_cells": unfitted,
             "paired_development_count": sum(paired_label(r.observation) for r in development),
@@ -716,6 +726,65 @@ def _distribution(values: list[float | int]) -> dict[str, float | int | None]:
         "mean": statistics.mean(ordered) if ordered else None,
         "median": statistics.median(ordered) if ordered else None,
         "p95": ordered[math.ceil(len(ordered) * 0.95) - 1] if ordered else None,
+    }
+
+
+def capacity_sensitivity(holdout: list[PayoutObservation]) -> dict[str, Any]:
+    """Describe measured label capacity, without fitting or running another policy."""
+    from examples.payouts.planning import PLANNING_POLICY
+
+    paired = [row for row in holdout if paired_label(row.observation)]
+
+    def at_cap(rows: list[PayoutObservation], cap: int) -> dict[str, int | float | None]:
+        fits = sum(
+            row.observation.label.compute_units <= cap
+            and row.observation.label.loaded_accounts_bytes <= PLANNING_POLICY.loaded_bytes_cap
+            for row in rows
+        )
+        return {
+            "compute_cap": cap,
+            "loaded_bytes_cap": PLANNING_POLICY.loaded_bytes_cap,
+            "within_both": fits,
+            "successful_paired_labels": len(rows),
+            "within_both_rate": fits / len(rows) if rows else None,
+        }
+
+    per_count = {}
+    for count in sorted({row.state.candidate_count for row in holdout}):
+        labels = [row for row in paired if row.state.candidate_count == count]
+        per_count[str(count)] = {
+            "holdout_rows": sum(row.state.candidate_count == count for row in holdout),
+            "successful_paired_labels": len(labels),
+            "maximum_observed_compute_units": max(
+                (row.observation.label.compute_units for row in labels), default=None
+            ),
+            "maximum_observed_loaded_accounts_bytes": max(
+                (row.observation.label.loaded_accounts_bytes for row in labels), default=None
+            ),
+            "declared_policy": at_cap(labels, PLANNING_POLICY.compute_cap),
+            "protocol_compute_ceiling": at_cap(labels, MAX_COMPUTE_UNITS),
+        }
+    eight = per_count.get("8")
+    return {
+        "scope": "descriptive frozen-holdout resource labels; no alternate executions",
+        "holdout_rows": len(holdout),
+        "successful_paired_labels": len(paired),
+        "failed_or_unpaired_rows": len(holdout) - len(paired),
+        "declared_policy": at_cap(paired, PLANNING_POLICY.compute_cap),
+        "protocol_compute_ceiling": at_cap(paired, MAX_COMPUTE_UNITS),
+        "by_candidate_count": per_count,
+        "all_observed_count8_pairs_fit_protocol_ceiling": (
+            eight["protocol_compute_ceiling"]["within_both"] == eight["successful_paired_labels"]
+            if eight and eight["successful_paired_labels"]
+            else None
+        ),
+        "interpretation": (
+            "The 100,000-CU scheduling cap was fixed before labels. A benefit under it does "
+            "not establish economic value or superiority at the protocol compute ceiling. "
+            "If two valid batches of eight fit, ordinary batching can complete sixteen "
+            "obligations in two transactions. This label comparison adds no measured "
+            "completion timings, fees, serialized-size support or safety guarantee."
+        ),
     }
 
 
@@ -818,11 +887,13 @@ def evaluate_bundle(
         "split": bundle.split.model_dump(mode="json"),
         "counts": bundle.diagnostics,
         "methods": summaries,
+        "capacity_sensitivity": capacity_sensitivity(holdout),
         "limitations": [
             "Resource-estimate holdout only; queue completion/ablation need actual execution.",
             "No fees, rent, latency, RPC savings or production reliability inferred from replay.",
             "Statistical coverage is separate from active release eligibility and controls.",
             "Local policy is weaker than the reusable core default and scoped to measured runtime.",
+            "Descriptive capacity sensitivity does not retune policy or execute another budget.",
         ],
     }
 

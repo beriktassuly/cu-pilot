@@ -6,15 +6,18 @@ import { resolve } from 'node:path';
 import { LocalRuntime, ROOT, PROGRAM, TOKEN, ATA, SYSTEM, kit, createInstruction, executeInstruction, instructionTag, queueAddress, ata, json } from '../../apps/payout-demo/bridge.mjs';
 
 const results=[];
+const rejectedTransactions=[];
+let activeCase='setup';
 const r=await LocalRuntime.start();
 const hex=()=>randomBytes(32).toString('hex');
 const meta=(address,role=0)=>({address:kit.address(address),role});
 const clone=ix=>({...ix,data:Buffer.from(ix.data),accounts:ix.accounts.map(a=>({...a}))});
-async function check(name,body){const started=performance.now();await body();results.push({name,passed:true,ms:performance.now()-started});console.log(`PASS ${name}`);}
+async function check(name,body){activeCase=name;const started=performance.now();await body();results.push({name,passed:true,ms:performance.now()-started});console.log(`PASS ${name}`);}
 async function transact(ix,payer=r.executor,signers=[payer]){const bound=await r.build([ix],payer);const signed=await r.sign(bound.wireBase64,signers);const result=await r.submit(signed.wire);assert.ok(result.transaction,'confirmed transaction metadata required');return {...result,wire:signed.wire};}
 async function rejected(ix,queue,payer=r.executor,signers=[payer]){
   const before=queue?await r.verify(queue):undefined;
   const result=await transact(ix,payer,signers);assert.ok(result.transaction.meta.err,'malicious instruction unexpectedly succeeded');
+  rejectedTransactions.push({case:activeCase,signature:result.signature,error:result.transaction.meta.err,compute_units:Number(result.transaction.meta.computeUnitsConsumed),queue:queue??null,cursor_before:before?.queue.cursor??null});
   if(before){const after=await r.verify(queue);assert.deepEqual(after.queue.payments,before.queue.payments);assert.equal(after.queue.cursor,before.queue.cursor);assert.equal(after.queue.total_paid,before.queue.total_paid);assert.equal(after.queue.paid_count,before.queue.paid_count);assert.equal(after.vault_balance,before.vault_balance);assert.deepEqual(after.balances,before.balances);}
   return result;
 }
@@ -29,6 +32,7 @@ async function refundIx(queue,owner=r.owner){const q=await r.queue(queue);return
 try{
   const created=await r.create({length:4,existing:2});const queue=created.queue.address;
   await check('owner funds immutable terms and queue vault',async()=>{assert.ok(created.correct);assert.equal(created.queue.cursor,0);assert.equal(created.vault_balance,'10000');assert.equal(created.duplicate_count,0);});
+  const telemetry=await r.dispatch({action:'info'});assert.equal(telemetry.bridge_rpc_calls,2);assert.deepEqual(telemetry.bridge_rpc_methods,{getVersion:1,getSlot:1});
   await check('create retry reconciles durable identity without a second debit',async()=>{
     const id=hex(),options={id,length:1};const first=await r.create(options);const sourceBefore=(await r.account(r.source)).value.data[0];const again=await r.create(options);assert.equal(again.queue.address,first.queue.address);assert.equal(again.reconciled_existing,true);assert.equal((await r.account(r.source)).value.data[0],sourceBefore);await assert.rejects(r.create({...options,payments:[{recipient:await r.newSigner(),amount:'2000'}]}),/terms_mismatch/);
   });
@@ -68,6 +72,57 @@ try{
     }
   });
   await check('non-menu partial counts and zero count rejected',async()=>{await rejected(await execution(queue,3),queue);await rejected(await execution(queue,0),queue);});
+  await check('vault authority, mint, delegate, close authority and frozen state rejected',async()=>{
+    const address=created.queue.vault,original=(await r.account(address)).value,bytes=Buffer.from(original.data[0],'base64');
+    const executorBytes=Buffer.from(kit.getAddressEncoder().encode(r.executor));
+    for(const kind of ['authority','mint','delegate','close_authority','frozen','native']){
+      const data=Buffer.from(bytes);
+      if(kind==='authority')executorBytes.copy(data,32);
+      if(kind==='mint')data.fill(0,0,32);
+      if(kind==='delegate'){data.writeUInt32LE(1,72);executorBytes.copy(data,76);data.writeBigUInt64LE(1n,121);}
+      if(kind==='close_authority'){data.writeUInt32LE(1,129);executorBytes.copy(data,133);}
+      if(kind==='frozen')data[108]=2;
+      if(kind==='native'){data.writeUInt32LE(1,109);data.writeBigUInt64LE(0n,113);}
+      // Labeled unsupported-state injection; owner/executor cannot perform these mutations through the program.
+      r.surf.setAccount(address,Number(original.lamports),Uint8Array.from(data),TOKEN);
+      await rejected(await execution(queue),queue);
+      r.surf.setAccount(address,Number(original.lamports),Uint8Array.from(bytes),TOKEN);
+    }
+  });
+  await check('unsolicited SOL cannot squat a fresh queue PDA',async()=>{
+    const payment={recipient:await r.newSigner(),amount:'1000'},fixture=await creation([payment]);
+    const data=Buffer.alloc(12);data.writeUInt32LE(2);data.writeBigUInt64LE(1000000n,4);
+    await r.sendInstructions([{programAddress:kit.address(SYSTEM),accounts:[meta(r.executor,3),meta(fixture.queue,1)],data}],r.executor);
+    const before=await r.account(fixture.queue);assert.equal(before.value.owner,SYSTEM);assert.equal(before.value.data[0],'');
+    const result=await transact(fixture.ix,r.owner);assert.equal(result.transaction.meta.err,null);
+    const verified=await r.verify(fixture.queue);assert.ok(verified.correct);assert.equal(verified.vault_balance,'1000');assert.equal((await r.account(fixture.queue)).value.owner,PROGRAM);
+  });
+  await check('owner and executor can be immutable recipients despite merged signer roles',async()=>{
+    const payments=[{recipient:r.owner,amount:'1000'},{recipient:r.executor,amount:'2000'}],fixture=await creation(payments);
+    const ownerBefore=Buffer.from((await r.account(r.source)).value.data[0],'base64').readBigUInt64LE(64);
+    const executorAta=await ata(r.executor,r.mint),executorAccount=await r.account(executorAta);
+    const executorBefore=executorAccount.value?Buffer.from(executorAccount.value.data[0],'base64').readBigUInt64LE(64):0n;
+    const approved=await transact(fixture.ix,r.owner);assert.equal(approved.transaction.meta.err,null);
+    const result=await transact(await execution(fixture.queue,2));assert.equal(result.transaction.meta.err,null);
+    const ownerAfter=Buffer.from((await r.account(r.source)).value.data[0],'base64').readBigUInt64LE(64);
+    const executorAfter=Buffer.from((await r.account(executorAta)).value.data[0],'base64').readBigUInt64LE(64);
+    assert.equal(ownerBefore-ownerAfter,2000n);assert.equal(executorAfter-executorBefore,2000n);
+    const state=await r.queue(fixture.queue);assert.equal(state.cursor,2);assert.equal(state.paid_count,2);assert.equal(state.total_paid,'3000');assert.equal(state.status,1);
+  });
+  await check('application rejects nonzero recipient balances before funding',async()=>{
+    const id=hex(),address=await queueAddress(r.owner,id),sourceBefore=(await r.account(r.source)).value.data[0];
+    await assert.rejects(r.create({id,length:1,payments:[{recipient:r.owner,amount:'1'}]}),/fresh recipient with a zero token balance/);
+    assert.equal((await r.account(address)).value,null);assert.equal((await r.account(r.source)).value.data[0],sourceBefore);
+  });
+  await check('prefunded uninitialized recipient ATA is outside learned state support',async()=>{
+    const fixture=await r.create({length:1}),address=fixture.queue.address,destination=await ata(fixture.queue.payments[0].recipient,r.mint);
+    const data=Buffer.alloc(12);data.writeUInt32LE(2);data.writeBigUInt64LE(1000000n,4);
+    await r.sendInstructions([{programAddress:kit.address(SYSTEM),accounts:[meta(r.executor,3),meta(destination,1)],data}],r.executor);
+    const snapshot=await r.snapshot(address,1);assert.equal(snapshot.supported,false);assert.equal(snapshot.ata_states[0],'unsupported');assert.equal(snapshot.missing_atas,0);
+    const candidate=await r.candidate({queue:address,count:1,decision:hex(),model:hex()});
+    const simulation=await r.call('simulateTransaction',candidate.wire,{encoding:'base64',sigVerify:false,commitment:'confirmed'});assert.equal(simulation.value.err,null);
+    const result=await transact(await execution(address));assert.equal(result.transaction.meta.err,null);assert.ok((await r.verify(address)).correct);
+  });
   await check('zero amount, duplicate beneficiaries, overflow and empty queue rejected',async()=>{
     const a=await r.newSigner(),b=await r.newSigner();
     for(const payments of [[],[{recipient:a,amount:'0'}],[{recipient:a,amount:'1'},{recipient:a,amount:'2'}],[{recipient:a,amount:'18446744073709551615'},{recipient:b,amount:'1'}]]){
@@ -127,7 +182,14 @@ try{
     const replay=createInstruction({owner:r.owner,queue:address,vault:state.vault,mint:r.mint,source:r.source,executor:r.executor,id:state.queue_id,expiry:expiry+86400,payments:state.payments});await rejected(replay,address,r.owner);
     assert.equal((await r.account(address)).value.owner,PROGRAM,'refund must retain durable queue identity');
   });
-  const report={passed:true,runtime:await r.call('getVersion'),elf_digest:r.elf_digest,program:PROGRAM,rpc_calls:r.calls,tests:results};
+  await check('default expiry follows chain Clock after time travel',async()=>{
+    const target=(await r.chainTime())+7*86400;r.surf.timeTravelToTimestamp(target*1000);
+    const before=await r.chainTime(),created=await r.create({length:1}),after=await r.chainTime();
+    assert.ok(before>=target);assert.ok(created.queue.expiry>=before+86400&&created.queue.expiry<=after+86400);
+    await r.sendInstructions([await execution(created.queue.address)]);assert.ok((await r.verify(created.queue.address)).correct);
+  });
+  const report={passed:true,runtime:await r.call('getVersion'),elf_digest:r.elf_digest,program:PROGRAM,rpc_calls:r.calls,rpc_methods:r.methodCounts,tests:results,rejected_transactions:rejectedTransactions};
+  assert.equal(Object.values(report.rpc_methods).reduce((sum,count)=>sum+count,0),report.rpc_calls);
   mkdirSync(resolve(ROOT,'artifacts/payouts'),{recursive:true});writeFileSync(resolve(ROOT,'artifacts/payouts/program-tests.json'),json(report));
   console.log(`Passed ${results.filter(x=>x.passed).length} real-program security checks.`);
 }finally{r.close();}
