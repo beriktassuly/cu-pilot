@@ -1074,9 +1074,7 @@ def main() -> None:
             printed = {
                 "queue": queue_state.get("address"),
                 "method": args.method,
-                "executed_counts": [
-                    step["chosen_count"] for step in steps if step.get("success")
-                ],
+                "executed_counts": [step["chosen_count"] for step in steps if step.get("success")],
                 "failed_attempts": sum(step.get("success") is False for step in steps),
                 "completed": queue_state.get("paid_count"),
                 "pending": queue_state.get("length", 0) - queue_state.get("cursor", 0),

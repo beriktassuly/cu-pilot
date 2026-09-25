@@ -16,6 +16,8 @@ jobs:
         with:
           node-version: '24.14.1'
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.7'
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: actions/cache@v4
         with:

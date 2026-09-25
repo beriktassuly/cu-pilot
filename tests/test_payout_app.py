@@ -535,11 +535,19 @@ def test_confirmed_failure_limit_is_durable_and_blocks_new_signing(pending, monk
     assert app.store.db.execute("SELECT COUNT(*) FROM payout_steps").fetchone()[0] == 2
 
 
-def test_suspended_profile_can_sign_a_fresh_simulation_fallback(pending, monkeypatch) -> None:
+@pytest.mark.parametrize("scenario", ["suspended", "over_cap"])
+def test_fallback_signs_with_provenance_and_counts_each_simulation_once(
+    pending, monkeypatch, scenario
+) -> None:
     """The release gate must not reject measured fallback merely for retaining provenance."""
     app, bridge, transaction, _, _, body = pending
     failed = copy.deepcopy(transaction)
-    failed["meta"]["err"] = {"InstructionError": [0, "ComputationalBudgetExceeded"]}
+    failed["meta"]["err"] = {
+        "InstructionError": [
+            0,
+            "ComputationalBudgetExceeded" if scenario == "suspended" else "InvalidAccountData",
+        ]
+    }
     bridge.evidence = [evidence(failed)]
     app.reconcile_pending("fixture-queue")
     payer = Keypair.from_seed(bytes(range(32)))
@@ -597,12 +605,29 @@ def test_suspended_profile_can_sign_a_fresh_simulation_fallback(pending, monkeyp
     def prepare(wire, **kwargs):
         kwargs.update(registry=None, profile_id=None)
         plan = original_prepare(wire, **kwargs)
+        if scenario == "over_cap":
+            # A qualified-looking prediction can exceed the fixed scheduling cap.
+            # Its selected fallback simulation must still be counted exactly once.
+            plan = plan.model_copy(
+                update={
+                    "prediction": plan.prediction.model_copy(
+                        update={
+                            "simulation_recommended": False,
+                            "reason": "supported",
+                            "compute_unit_limit": 200_000,
+                            "loaded_accounts_data_size_limit": 100_000,
+                        }
+                    )
+                }
+            )
         return plan.model_copy(
             update={
                 "profile_id": "suspended-profile",
                 "profile_revision": 7,
                 "artifact_digest": "f" * 64,
-                "eligibility_reason": "profile_suspended",
+                "eligibility_reason": "profile_suspended"
+                if scenario == "suspended"
+                else "supported",
             }
         )
 
@@ -625,7 +650,9 @@ def test_suspended_profile_can_sign_a_fresh_simulation_fallback(pending, monkeyp
     ).fetchone()
     frozen = json.loads(row["body"])
     assert row["phase"] == "signed" and frozen["mode"] == "fallback"
-    assert frozen["recovery_simulation"] and frozen["retry_after_confirmed_failure"]
+    assert frozen["recovery_simulation"] is (scenario == "suspended")
+    assert frozen["retry_after_confirmed_failure"]
+    assert frozen["estimation_simulations"] == 1 and frozen["control_simulations"] == 0
     assert frozen["decision"]["plan"]["profile_id"] == "suspended-profile"
     assert sends(bridge) == []
 
