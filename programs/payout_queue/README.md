@@ -14,7 +14,7 @@ required. Pinning these interfaces preserves the already-tested local runtime
 instead of upgrading the entire repository for this application.
 
 From the repository root in Linux or WSL Ubuntu, with Cargo and Agave's
-`cargo-build-sbf 3.1.15` / platform-tools `1.52` installed:
+`cargo-build-sbf 3.1.10` / platform-tools `1.52` installed:
 
 ```sh
 cargo test --locked --manifest-path programs/payout_queue/Cargo.toml
@@ -84,9 +84,26 @@ later account/transfer fails. A stale concurrent decision cannot pay again.
 Decision and model digests are audit metadata, never debit authority or proof
 of correct prediction. Expiry uses the on-chain Clock Unix timestamp.
 
+The application uses the processed current-bank slot as its snapshot-freshness
+clock. Queue/account snapshots, deployment evidence, resource simulations and
+transaction reconciliation use confirmed commitment. The freshness clock does
+not claim finalized confirmation. A snapshot is evidence rather than a lock:
+on-chain cursor/authority checks and rollback still protect correctness if
+account state changes between planning and execution.
+
 Executor signature authority also permits it to spend its own SOL on ATA rent
 and transaction fees. The token vault does not cap that separate spending; the
 application funds a bounded test allowance and limits retries before signing.
+
+The bounded application accepts fresh recipients or initialized recipient ATAs
+with zero token balances, checked before queue funding. This makes its absolute
+balance audit unambiguous. Nonzero balances (including the funded owner's source
+ATA) are rejected by the application even though the program itself can pay such
+an immutable approved recipient. External deposits after approval require a pause
+and reconciliation; excess balance alone is not proof of a duplicate payout.
+An uninitialized ATA address prefunded with SOL is outside learned support and
+requires simulation, because its account-creation path differs from a missing
+zero-lamport account. The on-chain ATA program can still handle that path.
 
 ## Wire format version 1
 
@@ -131,6 +148,11 @@ Expired, NotExpired, Terminal, AlreadyExists, InvalidExpiry.
 The direct and transitive CPI dependency closure is payout program, classic Token,
 ATA and System. A profile must invalidate when a mutable deployment in that
 closure changes, even if the payout program itself is unchanged.
+
+Queue expiry uses the on-chain Clock sysvar. The application defaults to one day
+after that clock, including after local time travel. Surfpool 1.5.0 transaction
+`blockTime` metadata may differ in scale from Clock; it is not used for expiry or
+measurement durations. Duration measurements use monotonic local timers.
 
 Official interface references checked during implementation:
 [recipient verification](https://solana.com/docs/payments/send-payments/verify-address),

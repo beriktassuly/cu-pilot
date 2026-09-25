@@ -48,6 +48,13 @@ a whole window belongs to only one partition. Default one-slot windows avoid
 counting many transactions in the same slot as independent evidence. Larger
 windows can reduce burst inflation, but do not prove temporal independence.
 
+Callers with related queues or state snapshots may first freeze a broader grouped
+split and pass `calibration_boundary_slot=...` to `ResourceEstimator.fit`. The
+boundary is a keyword-only option and must not divide an evidence window. This
+keeps all state-specific profiles on the same preselected chronology; the default
+split and generic unsigned workflow are unchanged. The payout reference uses this
+option after grouping queue identities and overlapping snapshot intervals.
+
 Learn resource quantiles, numerical feature ranges, and instruction length ranges
 from successful paired fitting rows only. Within each evidence window use the
 maximum CU and maximum loaded bytes. These maxima can come from different paired

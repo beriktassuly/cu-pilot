@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>CU Pilot · Local payouts</title>
+  <style>
+    :root{--paper:#f3f1e9;--card:#fcfbf6;--ink:#24352e;--muted:#607067;--line:#d4d9ce;--green:#225f49;--wash:#e4ece0;--yellow:#eed493;--red:#a6382c}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Bahnschrift","Trebuchet MS",sans-serif}
+    button,input,select{font:inherit}button,select{cursor:pointer}button{min-height:42px;border:1px solid var(--ink);border-radius:4px;padding:9px 15px;background:transparent;color:var(--ink);font-weight:600;transition:background .15s}button:hover:not(:disabled){background:var(--wash)}button.primary{background:var(--ink);color:white}button.primary:hover:not(:disabled){background:var(--green)}button:disabled{opacity:.45;cursor:not-allowed}button.subtle{border-color:var(--line)}button.danger{color:var(--red);border-color:var(--red)}button.small{min-height:32px;padding:5px 9px;font-size:12px}
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #ca9c27;outline-offset:3px}input,select{background:var(--card);border:1px solid var(--line);border-radius:3px;min-height:42px;padding:8px 10px;color:var(--ink)}input[type=checkbox]{min-height:18px;width:18px;accent-color:var(--green)}h1,h2,h3,p{margin:0}h1,h2{font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Georgia,serif;font-weight:400}h1{font-size:clamp(36px,5vw,62px);line-height:1.04;letter-spacing:-1.8px;max-width:700px}h2{font-size:27px;line-height:1.2}h3{font-size:14px;font-weight:600}a{color:var(--green)}code,.mono{font:12px/1.6 "Cascadia Code",Consolas,monospace;overflow-wrap:anywhere}.muted{color:var(--muted)}.eyebrow{font-size:11px;letter-spacing:1.6px;text-transform:uppercase;font-weight:600}.tag{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:20px;padding:5px 10px;font-size:11px;white-space:nowrap}.dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}.tag.live .dot{background:var(--green)}.tag.bad .dot{background:var(--red)}
+    .shell{max-width:1232px;margin:auto;padding:0 36px}.masthead{display:flex;justify-content:space-between;align-items:center;height:84px;border-bottom:1px solid var(--line);gap:16px}.brand{font-weight:700;font-size:19px;letter-spacing:-.5px}.brand span{font-weight:400;color:var(--muted);margin-left:14px;font-size:13px;letter-spacing:0}.mark{display:inline-block;width:21px;height:21px;vertical-align:-3px;margin-right:10px;background:var(--green);clip-path:polygon(0 0,100% 0,100% 35%,35% 35%,35% 100%,0 100%)}.hero{padding:44px 0 36px;display:flex;justify-content:space-between;align-items:flex-end;gap:28px}.hero .eyebrow{margin-bottom:15px;color:var(--green)}.intro{max-width:315px;font-size:14px;color:var(--muted)}.intro strong{color:var(--ink);font-weight:600}.notice{border-left:3px solid var(--red);background:#f7e8e2;padding:13px 17px;margin-bottom:20px;color:#78271e}.notice[hidden]{display:none}.toolbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-end;padding:20px 0;border-top:1px solid var(--line)}.toolbar label{display:grid;gap:6px;flex:1;max-width:530px}.toolbar select{width:100%}.layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);gap:22px}.panel{background:var(--card);border:1px solid var(--line);border-radius:5px;overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:22px 24px;border-bottom:1px solid var(--line);gap:12px}.panel-head .eyebrow{color:var(--muted);margin-bottom:6px}.panel-body{padding:22px 24px}.empty{padding:56px 32px;text-align:center;max-width:450px;margin:auto}.empty h2{margin-bottom:12px}.empty p{color:var(--muted);margin-bottom:20px}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding-bottom:20px}.big{font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif;font-size:43px;line-height:1.1}.big small{font-size:22px;color:var(--muted)}.caption{font-size:12px;color:var(--muted);margin-top:7px}.progress{height:6px;overflow:hidden;border-radius:5px;background:var(--line);margin:5px 0 20px}.progress span{display:block;background:var(--green);height:100%;transition:width .4s}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 11px}.control-note{font-size:12px;color:var(--muted)}.rule{margin:22px 0;border:0;border-top:1px solid var(--line)}.facts{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;font-size:12px;margin:0}.facts dt{color:var(--muted)}.facts dd{margin:0;text-align:right;overflow-wrap:anywhere}.ok{color:var(--green)}.error{color:var(--red)}.pill{display:inline-block;padding:3px 8px;background:var(--wash);border-radius:3px;font-size:11px}.pill.pending{background:#f0ecdf;color:#6f674e}.pill.blocked{background:#f7e8e2;color:var(--red)}
+    .table-wrap{overflow:auto;max-height:518px}table{width:100%;border-collapse:collapse;font-size:12px}th{position:sticky;top:0;background:var(--card);padding:11px 15px;text-align:left;text-transform:uppercase;font-size:9px;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--line);z-index:1}td{padding:12px 15px;border-bottom:1px solid #e7e9e1;vertical-align:middle}tr:last-child td{border:0}td.numeric,th.numeric{text-align:right;font-variant-numeric:tabular-nums}.recipient{display:block;max-width:250px;font:11px/1.6 "Cascadia Code",Consolas,monospace;overflow-wrap:anywhere}.row-number{font-size:10px;color:var(--muted);margin-bottom:2px}.recipient-address{max-width:240px}.token-note{padding:13px 23px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.decision{margin-top:22px}.decision-grid{display:grid;grid-template-columns:170px 1fr;gap:26px}.choice{border-right:1px solid var(--line);padding-right:22px}.choice .big{font-size:68px}.choice .caption{margin-bottom:12px}.reason{font-size:14px;margin:0 0 18px;max-width:760px}.candidates{display:flex;flex-wrap:wrap;gap:8px}.candidate{padding:10px 13px;border:1px solid var(--line);border-radius:3px;min-width:108px}.candidate.chosen{border:2px solid var(--green);background:var(--wash);padding:9px 12px}.candidate strong{font-size:17px}.candidate small{display:block;color:var(--muted);font-size:10px;margin-top:4px}.trace{margin-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:18px;font-size:12px}.trace code{display:block;margin-top:5px}.state-action{padding-top:19px;border-top:1px solid var(--line);margin-top:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}.state-action p{flex:1;min-width:180px;font-size:12px;color:var(--muted)}
+    .approval{margin:0 0 22px;border:1px solid var(--green);background:var(--card);border-radius:5px}.approval[hidden]{display:none}.approval-top{padding:23px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line)}.approval-controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap;padding:19px 24px}.field{display:grid;gap:6px;font-size:12px}.field input,.field select{width:130px}.approval-list{max-height:260px;overflow:auto;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.approval-list input{width:125px;font-size:12px;text-align:right;min-height:34px}.approval-footer{padding:20px 24px;display:flex;gap:20px;align-items:center;justify-content:space-between}.approval-footer label{display:flex;align-items:flex-start;gap:10px;font-size:12px;max-width:680px}.approval-footer input{flex-shrink:0;margin-top:0}.footer{padding:28px 0 36px;display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:11px}.footer code{font-size:10px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.busy{cursor:progress}
+    .candidate>span{display:block;font-size:11px;margin-top:4px}.table-wrap:focus-visible{outline:3px solid #ca9c27;outline-offset:-3px}.approval-list .recipient-input{width:100%;min-width:235px;text-align:left;font-family:"Cascadia Code",Consolas,monospace}
+    @media(max-width:900px){.shell{padding:0 20px}.hero{display:block}.intro{max-width:560px;margin-top:20px}.layout{grid-template-columns:1fr}.table-wrap{max-height:400px}.hero{padding-top:32px}.footer{display:block}.footer>div+div{margin-top:10px}}
+    @media(max-width:560px){.shell{padding:0 13px}.masthead{height:70px}.brand span{display:none}.hero h1{font-size:40px}.toolbar{align-items:stretch;flex-direction:column}.panel-head,.panel-body{padding:18px}.approval-top,.approval-footer{display:block}.approval-footer button{width:100%;margin-top:16px}.approval-controls{padding:18px;gap:10px}.field input,.field select{width:110px}.approval-top button{margin-top:14px}.decision-grid{grid-template-columns:1fr}.choice{display:flex;align-items:center;gap:18px;border-right:0;border-bottom:1px solid var(--line);padding-bottom:15px}.choice .big{font-size:52px}.choice .caption{margin:0}.trace{grid-template-columns:1fr}td,th{padding:10px}.recipient{font-size:10px;min-width:150px}.footer code{word-break:break-all}}
+    @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead"><div class="brand"><i class="mark" aria-hidden="true"></i>CU Pilot<span>Payout reference</span></div><div id="connection" class="tag"><i class="dot" aria-hidden="true"></i><span>Connecting to local runtime</span></div></header>
+    <section class="hero" aria-labelledby="title"><div><p class="eyebrow">Fixed authority. Adaptive execution.</p><h1 id="title">Approve the payments.<br>Let the queue move.</h1></div><p class="intro">A learned resource estimate chooses the next batch. The program enforces the recipients and amounts you approved.<br><strong>Isolated local Solana · test tokens only.</strong></p></section>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <div class="toolbar"><label for="queue-select"><span class="eyebrow">Approved queue</span><select id="queue-select" disabled><option>No funded queues</option></select></label><button id="new-queue" class="primary" disabled>Review a new queue <span aria-hidden="true">↗</span></button></div>
+
+    <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+      <div class="approval-top"><div><p class="eyebrow muted">01 / Owner approval</p><h2 id="approval-title">Review immutable payment terms</h2></div><button id="cancel-draft" class="small subtle">Close review</button></div>
+      <div class="approval-controls"><label class="field" for="length">Payments<input id="length" type="number" min="1" max="16" value="16"></label><label class="field" for="existing">Existing token accounts<input id="existing" type="number" min="0" max="16" value="0"></label><button id="draft-button" class="subtle">Prepare recipients</button><p id="draft-note" class="caption">Prepare a list, review each amount, then approve funding.</p></div>
+      <div class="approval-list"><table aria-label="Recipients and amounts for owner approval"><thead><tr><th>Recipient wallet</th><th class="numeric">Approved integer units</th></tr></thead><tbody id="draft-rows"></tbody></table></div>
+      <div class="approval-footer"><label><input id="approve-check" type="checkbox" disabled><span>I approve these exact recipients and amounts. Funding fixes these terms on chain; the worker can only execute the next approved payments.</span></label><button id="fund-button" class="primary" disabled>Approve &amp; fund test queue</button></div>
+    </section>
+
+    <main>
+      <div class="layout">
+        <section class="panel" aria-labelledby="payments-title"><div class="panel-head"><div><p class="eyebrow">02 / Approved obligations</p><h2 id="payments-title">Payment ledger</h2></div><span id="queue-status" class="pill pending">No queue</span></div><div id="empty-ledger" class="empty"><h2>Every payment starts<br>with your approval.</h2><p>Review a list of local test recipients and fund its vault. Live balances appear here as each batch confirms.</p></div><div id="ledger-wrap" class="table-wrap" hidden><table><thead><tr><th>Recipient</th><th class="numeric">Approved</th><th class="numeric">Verified balance</th><th>Status</th></tr></thead><tbody id="payment-rows"></tbody></table></div><p class="token-note">Amounts are integer token units. This test asset is not USDC and represents no real-world asset.</p></section>
+        <section class="panel" aria-labelledby="progress-title"><div class="panel-head"><div><p class="eyebrow">03 / Local execution</p><h2 id="progress-title">Queue progress</h2></div><span id="worker-status" class="tag">Worker stopped</span></div><div class="panel-body"><div class="metrics"><div><div class="big"><span id="paid">0</span><small> / <span id="total">0</span></small></div><p class="caption">Verified paid obligations</p></div><div><div id="pending" class="big">0</div><p class="caption">Still pending</p></div></div><div id="progress" class="progress" role="progressbar" aria-label="Paid obligations" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><span style="width:0%"></span></div><div class="controls"><button id="start" class="primary" disabled>Start worker</button><button id="stop" class="subtle" disabled>Stop worker</button><button id="pause" class="subtle" disabled>Pause on chain</button></div><p class="control-note">Stopping the worker prevents its next action. Pausing on chain makes the program reject execution until the owner resumes it.</p><hr class="rule"><dl class="facts"><dt>Payment verification</dt><dd id="verification">Awaiting a queue</dd><dt>Cursor / paid count</dt><dd id="cursor">—</dd><dt>Vault token balance</dt><dd id="vault">—</dd><dt>Duplicate payments</dt><dd id="duplicates">—</dd></dl><div class="state-action"><p>Change the next recipient’s account state before the next decision.</p><button id="create-ata" class="small subtle" disabled>Create next token account</button></div></div></section>
+      </div>
+      <section class="panel decision" aria-labelledby="decision-title"><div class="panel-head"><div><p class="eyebrow">04 / Estimate → decision → transfer</p><h2 id="decision-title">Latest execution decision</h2></div><span id="decision-mode" class="pill pending">Awaiting decision</span></div><div class="panel-body"><div class="decision-grid"><div class="choice"><div id="chosen" class="big">—</div><p class="caption">Chosen batch count</p><span id="tx-status" class="tag">No transaction yet</span></div><div><p id="reason" class="reason">Starting the worker evaluates the supported contiguous prefixes under the same resource limits. Each decision is saved before execution.</p><div id="candidates" class="candidates" aria-label="Evaluated candidate batches"></div></div></div><div class="trace"><div><span class="eyebrow muted">Transaction signature</span><code id="signature">—</code></div><div><span class="eyebrow muted">Prediction / measured execution</span><p id="resources" class="caption">Resource measurements appear after reconciliation.</p></div></div></div></section>
+    </main>
+    <footer class="footer"><div>CU Pilot’s reusable core prepares unsigned transactions.<br>This local reference application owns test signing and execution.</div><div>Test mint <code id="mint">—</code><br>Program <code id="program">—</code></div></footer>
+    <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+  </div>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    $('ledger-wrap').tabIndex=0;$('ledger-wrap').setAttribute('aria-label','Approved payment ledger; scroll to inspect every recipient');
+    const stepButton=document.createElement('button');stepButton.id='step';stepButton.className='subtle';stepButton.textContent='Execute one batch';stepButton.disabled=true;$('start').after(stepButton);
+    const history=document.createElement('details');history.style.marginTop='22px';history.innerHTML='<summary>Recent submitted batches</summary><div class="table-wrap"><table aria-label="Recent execution evidence"><thead><tr><th>Count / source</th><th>Verified progress</th><th>Signature</th></tr></thead><tbody id="history-rows"></tbody></table></div>';
+    $('signature').closest('.trace').after(history);
+    let state = null, selected = '', draft = null, busy = false, refreshing = false, lastRender = '', stateError = '', connectionError = '', optionKey = '';
+    const format = value => value === undefined || value === null ? '—' : String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const queueOf = value => value?.queue && typeof value.queue === 'object' ? value.queue : value;
+    const entries = () => state?.queues ?? [];
+    const current = () => entries().find(item => queueOf(item)?.address === selected) ?? null;
+    const announce = message => { $('announcer').textContent = message; };
+    function notice(message = '') { $('notice').hidden = !message; $('notice').textContent = message; }
+    async function api(path, body) {
+      const headers = {'Accept':'application/json'};
+      if (body !== undefined) { headers['Content-Type'] = 'application/json'; headers['X-Payout-Token'] = state?.csrf_token ?? state?.token ?? ''; }
+      const response = await fetch(path, {method:body === undefined ? 'GET' : 'POST',headers,body:body === undefined ? undefined : JSON.stringify(body),cache:'no-store',credentials:'same-origin'});
+      const result = await response.json();
+      if (!response.ok || result.error) throw Error(result.error ?? `Local service returned ${response.status}`);
+      return result;
+    }
+    async function action(task) {
+      if (busy) return;
+      busy = true; notice(); document.body.classList.add('busy'); renderControls();
+      try { await task(); await refresh(); }
+      catch (error) { notice(error.message); announce(error.message); }
+      finally { busy = false; document.body.classList.remove('busy'); renderControls(); }
+    }
+    function cell(row, value, className = '') { const td = document.createElement('td'); td.className = className; td.textContent = value; row.append(td); return td; }
+    function label(text, className) { const span = document.createElement('span'); span.className = className; span.textContent = text; return span; }
+    function renderControls() {
+      const q = queueOf(current()), running = !!state?.worker?.running, active = q && Number(q.status) === 0;
+      $('new-queue').disabled = !state || busy;
+      $('queue-select').disabled = !entries().length || busy;
+      $('start').disabled = busy || !active || q.paused || running;
+      $('step').disabled = busy || !active || q.paused || running;
+      $('stop').disabled = busy || !running;
+      $('pause').disabled = busy || !active;
+      $('pause').textContent = q?.paused ? 'Resume on chain' : 'Pause on chain';
+      const nextAccount=current()?.balances?.[Number(q?.cursor)]?.ata_exists;
+      $('create-ata').disabled = busy || running || !active || Number(q.cursor) >= Number(q.length) || nextAccount===true;
+      $('create-ata').textContent=nextAccount===true?'Next token account ready':'Create next token account';
+      $('worker-status').textContent = running ? 'Worker running' : 'Worker stopped';
+      $('worker-status').className = running ? 'tag live' : 'tag';
+      $('fund-button').disabled = busy || !draft || !$('approve-check').checked;
+      $('draft-button').disabled = busy || !state;
+      $('cancel-draft').disabled = busy;
+    }
+    function render() {
+      const items = entries();
+      if (!items.some(item => queueOf(item)?.address === selected)) selected = state.selected ?? queueOf(items[items.length - 1])?.address ?? '';
+      const options = items.map(item => {const q=queueOf(item); return {value:q.address,text:`${q.address.slice(0,8)}…${q.address.slice(-5)} · ${q.cursor}/${q.length} paid`};});
+      const nextOptionKey=JSON.stringify(options);
+      if (nextOptionKey!==optionKey) {
+        optionKey=nextOptionKey;
+        $('queue-select').replaceChildren(...(options.length ? options : [{value:'',text:'No funded queues'}]).map(option => {const node=document.createElement('option');node.value=option.value;node.textContent=option.text;return node;}));
+      }
+      $('queue-select').value = selected;
+      const item = current(), q = queueOf(item), verify = item?.verification ?? item;
+      $('mint').textContent = state.info?.mint ?? '—'; $('program').textContent = state.info?.program ?? '—';
+      $('empty-ledger').hidden = !!q; $('ledger-wrap').hidden = !q;
+      $('queue-status').textContent = !q ? 'No queue' : q.status === 2 ? 'Refunded' : q.status === 1 ? 'Completed' : q.paused ? 'Paused on chain' : 'Ready';
+      $('queue-status').className = `pill ${q?.paused ? 'blocked' : !q ? 'pending' : ''}`;
+      $('paid').textContent = format(q?.paid_count ?? 0); $('total').textContent = format(q?.length ?? 0);
+      $('pending').textContent = format(q ? q.length - q.cursor : 0);
+      $('progress').setAttribute('aria-valuemax',String(q?.length ?? 0)); $('progress').setAttribute('aria-valuenow',String(q?.paid_count ?? 0));
+      $('progress').firstElementChild.style.width = `${q?.length ? 100*q.paid_count/q.length : 0}%`;
+      $('verification').textContent = verify?.correct === true ? 'Balances and state match' : verify?.correct === false ? 'Verification failed' : 'Awaiting verification';
+      $('verification').className = verify?.correct === true ? 'ok' : verify?.correct === false ? 'error' : '';
+      $('cursor').textContent = q ? `${q.cursor} / ${q.paid_count}` : '—'; $('vault').textContent = format(verify?.vault_balance); $('duplicates').textContent = format(verify?.duplicate_count);
+      const fingerprint = JSON.stringify([q,verify?.balances]);
+      if (fingerprint !== lastRender) {
+        lastRender = fingerprint; $('payment-rows').replaceChildren();
+        for (const [i,payment] of (q?.payments ?? []).entries()) {
+          const row=document.createElement('tr'), recipient=document.createElement('td');
+          recipient.append(label(String(i+1).padStart(2,'0'),'row-number'),label(payment.recipient,'recipient')); row.append(recipient);
+          const balance=verify?.balances?.find(b=>b.recipient===payment.recipient);
+          if (typeof balance?.ata_exists==='boolean') recipient.append(label(balance.ata_exists?'Token account ready':'Account created on execution','caption'));
+          cell(row,format(payment.amount),'numeric'); cell(row,format(balance?.balance),'numeric');
+          const status=cell(row,''); status.append(label(i<q.cursor?'Paid':'Pending',i<q.cursor?'pill':'pill pending')); $('payment-rows').append(row);
+        }
+      }
+      const last = state.last;
+      if (last && Object.keys(last).length && (!last.queue || last.queue === selected)) {
+        $('chosen').textContent = format(last.chosen_count ?? last.count);
+        const mode=String(last.mode ?? last.source ?? 'Recorded decision');
+        $('decision-mode').textContent = ['model','learned','prediction'].includes(mode) ? 'Learned estimate' : mode.includes('simulat') || mode === 'fallback' ? 'Simulation fallback' : mode;
+        $('reason').textContent = last.reason==='forced_simulation'?'A bounded simulation verified the resources for this batch.':String(last.reason??'Decision recorded.').replaceAll('_',' ');
+        $('reason').title=last.reason??'';$('signature').textContent = last.signature ?? 'Awaiting submission';
+        const failed=last.success===false || last.phase==='failed';
+        $('tx-status').textContent = failed ? 'Failed — no payments advanced' : last.verification?.correct === true ? 'Confirmed & verified' : last.signature ? 'Submitted / reconciling' : 'Prepared';
+        const candidates=last.options ?? last.candidates ?? []; $('candidates').replaceChildren();
+        for (const candidate of (Array.isArray(candidates)?candidates:Object.values(candidates))) {
+          const node=document.createElement('div'); node.className=`candidate ${candidate.count===(last.chosen_count??last.count)?'chosen':''}`;
+          const title=document.createElement('strong');title.textContent=`${candidate.count} payment${candidate.count===1?'':'s'}`;node.append(title);
+          const estimate=candidate.estimate ?? candidate.prediction ?? candidate;
+          const cu=candidate.limits?.[0] ?? estimate.cu_limit ?? estimate.compute_units ?? estimate.cu ?? estimate.compute_unit_limit;
+          const loaded=candidate.limits?.[1] ?? estimate.loaded_accounts_bytes ?? estimate.loaded_data ?? estimate.loaded ?? estimate.loaded_accounts_data_size_limit;
+          node.append(label(cu===undefined?'No qualified estimate':`${format(cu)} CU · ${format(loaded)} bytes`,''));
+          const detail=document.createElement('small');detail.textContent=String(candidate.reason ?? (candidate.feasible===false || candidate.eligible===false?'Outside policy':'Candidate evaluated')).replaceAll('_',' ');node.append(detail);$('candidates').append(node);
+        }
+        const estimate=last.estimate??last.prediction??last.decision??{}; const actual=last.actual??last.outcome??{};
+        const resourceSource=mode==='fallback'?'simulation limit':'prediction limit';
+        const observation=failed?'observed before failure':'observed';
+        $('resources').textContent=`${failed?'Failed attempt: usage is censored and does not establish successful batch demand. ':''}CU: ${format(estimate.compute_unit_limit??estimate.cu_limit??estimate.cu??last.cu_limit)} ${resourceSource} / ${format(actual.compute_units??actual.computeUnitsConsumed??last.compute_units)} ${observation}. Loaded data: ${format(estimate.loaded_accounts_data_size_limit??estimate.loaded_accounts_bytes??estimate.loaded??last.loaded_limit)} ${resourceSource} / ${format(actual.loaded_accounts_bytes??actual.loadedAccountsDataSize??last.loaded_accounts_bytes)} ${observation}.`;
+      } else {
+        $('chosen').textContent='—';$('decision-mode').textContent='Awaiting decision';$('signature').textContent='—';$('tx-status').textContent='No transaction yet';$('candidates').replaceChildren();
+        $('reason').textContent='Starting the worker evaluates the supported contiguous prefixes under the same resource limits. Each decision is saved before execution.';
+        $('resources').textContent='Resource measurements appear after reconciliation.';
+      }
+      if (state.worker?.error) notice(state.worker.error);
+      else if (stateError && $('notice').textContent===stateError) notice();
+      stateError=state.worker?.error??'';
+      $('history-rows').replaceChildren();
+      for (const entry of (state.history??[]).filter(entry=>!entry.queue||entry.queue===selected)) {
+        const row=document.createElement('tr');cell(row,`${entry.chosen_count??'—'} / ${entry.mode==='prediction'?'learned':entry.mode??entry.phase??'recorded'}`);
+        const progress=entry.verification?.queue,failed=entry.success===false || entry.phase==='failed';cell(row,failed?'Failed — no payments advanced':Number.isInteger(progress?.cursor)?`${progress.cursor}/${progress.length} paid`:entry.success===true?'Confirmed':entry.phase??'Recorded');cell(row,entry.signature??'—','mono');$('history-rows').append(row);
+      }
+      history.hidden=!$('history-rows').children.length;
+      renderControls();
+    }
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        state=await api('/api/state');
+        if (connectionError && $('notice').textContent===connectionError) notice();
+        connectionError='';$('connection').className='tag live'; $('connection').lastElementChild.textContent='Local runtime connected'; render();
+      } catch(error) { connectionError=error.message;$('connection').className='tag bad'; $('connection').lastElementChild.textContent='Local service unavailable'; notice(error.message); }
+      finally { refreshing=false; }
+    }
+    async function prepareDraft() {
+      const length=Number($('length').value);
+      if (!Number.isInteger(length)||length<1||length>16) throw Error('Choose between 1 and 16 payments.');
+      draft=null;$('approve-check').checked=false;$('approve-check').disabled=true;
+      const result=await api(`/api/draft?length=${length}`);
+      if (!Array.isArray(result.payments)||result.payments.length!==length) throw Error('Local service returned an invalid approval list.');
+      draft=result;
+      $('existing').max=String(length);$('existing').value=String(Math.min(Number($('existing').value)||0,length));
+      $('draft-rows').replaceChildren();$('approve-check').checked=false;$('approve-check').disabled=false;
+      for (const [i,payment] of draft.payments.entries()) {
+        const row=document.createElement('tr'),recipientCell=cell(row,'','mono'),amount=cell(row,'','numeric');
+        const recipient=document.createElement('input');recipient.type='text';recipient.className='recipient-input';recipient.required=true;recipient.spellcheck=false;recipient.autocapitalize='off';recipient.minLength=32;recipient.maxLength=44;recipient.pattern='[1-9A-HJ-NP-Za-km-z]{32,44}';recipient.value=payment.recipient;recipient.dataset.recipient='';recipient.setAttribute('aria-label',`Recipient wallet ${i+1}`);
+        recipient.addEventListener('input',()=>{$('approve-check').checked=false;renderControls();});recipientCell.append(recipient);
+        const input=document.createElement('input');input.type='text';input.required=true;input.inputMode='numeric';input.pattern='[1-9][0-9]*';input.value=String(payment.amount);input.dataset.amount='';input.setAttribute('aria-label',`Approved integer amount for recipient ${i+1}`);
+        input.addEventListener('input',()=>{$('approve-check').checked=false;renderControls();});amount.append(input);$('draft-rows').append(row);
+      }
+      $('draft-note').textContent=`${length} local recipients prepared. Review every integer amount below.`;announce('Payment terms ready for owner review.');renderControls();
+    }
+    $('new-queue').addEventListener('click',()=>{$('approval').hidden=false;$('length').focus();});
+    $('cancel-draft').addEventListener('click',()=>{$('approval').hidden=true;$('new-queue').focus();});
+    $('draft-button').addEventListener('click',()=>action(prepareDraft));
+    $('approve-check').addEventListener('change',renderControls);
+    $('fund-button').addEventListener('click',()=>action(async()=>{
+      const inputs=[...$('draft-rows').querySelectorAll('input[data-amount]')],recipients=[...$('draft-rows').querySelectorAll('input[data-recipient]')],existing=Number($('existing').value);
+      if (!draft || !$('approve-check').checked || [...inputs,...recipients].some(input=>!input.checkValidity())) throw Error('Review valid recipient addresses and nonzero integer amounts, then approve the exact list.');
+      if (!Number.isInteger(existing)||existing<0||existing>draft.payments.length) throw Error('Existing account count must be between zero and the payment count.');
+      const payments=draft.payments.map((_payment,i)=>({recipient:recipients[i].value,amount:inputs[i].value}));
+      const created=await api('/api/create',{payments,existing,id:draft.id,length:payments.length}); selected=queueOf(created)?.address??created.address??'';
+      $('approval').hidden=true;draft=null;announce('Owner approved and funded the test queue.');
+    }));
+    $('queue-select').addEventListener('change',()=>{selected=$('queue-select').value;lastRender='';render();});
+    $('start').addEventListener('click',()=>action(async()=>{await api('/api/start',{queue:selected});announce('Local worker started.');}));
+    $('step').addEventListener('click',()=>action(async()=>{await api('/api/step',{queue:selected});announce('One batch executed and reconciled.');}));
+    $('stop').addEventListener('click',()=>action(async()=>{await api('/api/stop',{});announce('Worker stopped. The on-chain pause flag is unchanged.');}));
+    $('pause').addEventListener('click',()=>action(async()=>{const paused=!queueOf(current()).paused;await api('/api/pause',{queue:selected,paused});announce(paused?'Program paused on chain.':'Program resumed on chain.');}));
+    $('create-ata').addEventListener('click',()=>action(async()=>{await api('/api/ata',{queue:selected,index:Number(queueOf(current()).cursor)});announce('Next recipient token account created; the next plan will read the changed state.');}));
+    refresh();setInterval(refresh,1500);
+  </script>
+</body>
+</html>
