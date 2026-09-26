@@ -11,6 +11,31 @@ This is an experimental integration, **not a production-validated model**. The l
 prepares unsigned messages; it never signs or submits transactions. Local integration tests
 use ephemeral test keys and a private local runtime only. No customer or demand claim is made.
 
+## Autonomous payout reference
+
+The [payout reference application](docs/payouts.md) adds an actual local Solana program,
+an immutable owner-approved test-token queue, a learned resource planner, a resumable
+executor and a small browser interface. CU Pilot remains the reusable unsigned core;
+the application owns local signing and submission. Linux and Windows WSL commands
+build the program, collect its workload, train/calibrate, explicitly qualify a local
+artifact and run real transfers plus baseline/ablation reports.
+
+```sh
+bash scripts/payouts.sh bootstrap
+bash scripts/payouts.sh build
+bash scripts/payouts.sh test
+bash scripts/payouts.sh start
+bash scripts/payouts.sh collect --groups 80
+bash scripts/payouts.sh train
+bash scripts/payouts.sh qualify
+bash scripts/payouts.sh benchmark
+bash scripts/payouts.sh demo
+```
+
+The page opens at `http://127.0.0.1:8787`. The runtime, keys and test assets are
+isolated and local. See the application guide for foreground WSL operation,
+recovery, safe reset, measured evidence and limits.
+
 ## Integrated resource workflow
 
 Python 3.11+ and Node 24+ are required for both language runtimes. The Python SDK is
@@ -208,11 +233,11 @@ is an experimental policy, not a promise of a 5% production error rate. State de
 selection of successful historical transactions, temporal correlation, and program upgrades
 can all invalidate the estimate. See [model policy](docs/model.md) before changing thresholds.
 
-The next useful experiment is shadow mode on one repeated real workload: always simulate,
-log the prediction before observing results, collect both resource labels, retain failures,
-measure RPC latency, and evaluate later slots and unseen account cohorts. Only consider
-skipping simulation after meeting an agreed risk target with adequate independent evidence.
-No learned regressor is included yet; quantile baselines are the comparison to beat.
+The [payout reference application](docs/payouts.md) fits state-conditioned empirical quantiles
+from actual local program observations and explicitly qualifies profiles before skipping
+simulation. Its held-out errors, fallback coverage and full-queue baseline comparisons are
+reported without a production reliability claim. A public-network workload still needs
+separate shadow collection, an agreed risk target and adequate independent evidence.
 
 ## Development
 

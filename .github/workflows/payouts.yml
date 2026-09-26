@@ -1,0 +1,57 @@
+name: Local payout reference
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+permissions:
+  contents: read
+jobs:
+  payout-program:
+    runs-on: ubuntu-24.04
+    # Fresh SBF tools plus actual 80-group collection dominate the cold job.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.7'
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/solana/v1.52
+            ~/.cargo/registry
+            programs/payout_queue/target/debug
+            programs/payout_queue/target/release
+            programs/payout_queue/target/sbpf-solana-solana
+          key: payout-sbf-v1.52-${{ runner.os }}-${{ hashFiles('programs/payout_queue/Cargo.lock') }}
+      - run: bash scripts/payouts.sh bootstrap
+      - run: bash scripts/payouts.sh build
+      - run: bash scripts/payouts.sh test
+      - run: bash scripts/payouts.sh start
+      - run: bash scripts/payouts.sh collect --groups 80
+      - run: bash scripts/payouts.sh train
+      - run: bash scripts/payouts.sh qualify
+      - run: bash scripts/payouts.sh run --length 16 --existing 8
+      - run: bash scripts/payouts.sh benchmark
+      - run: bash scripts/payouts.sh upgrade-test
+      - name: Stop isolated runtime
+        if: always()
+        run: bash scripts/payouts.sh stop
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: payout-local-evidence
+          path: |
+            artifacts/payouts/program-tests.json
+            artifacts/payouts/build-verification.json
+            artifacts/payouts/estimates.json
+            artifacts/payouts/qualification.json
+            artifacts/payouts/last-run.json
+            artifacts/payouts/execution-report.json
+            artifacts/payouts/execution-report.md
+            artifacts/payouts/deployment-check.json
+          if-no-files-found: warn

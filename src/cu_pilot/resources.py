@@ -325,7 +325,19 @@ class ResourceEstimator:
         self.model = model
 
     @classmethod
-    def fit(cls, observations: list[Observation], policy: ResourcePolicy | None = None) -> Self:
+    def fit(
+        cls,
+        observations: list[Observation],
+        policy: ResourcePolicy | None = None,
+        *,
+        calibration_boundary_slot: int | None = None,
+    ) -> Self:
+        """Fit paired quantiles, optionally preserving a caller's frozen group split.
+
+        A supplied boundary must be chosen before filtering labels and may not
+        divide an evidence window. This lets related state snapshots stay together
+        when an application fits several independently scoped profiles.
+        """
         policy = policy or ResourcePolicy()
         if not observations:
             raise ValueError("fitting requires observations")
@@ -350,6 +362,13 @@ class ResourceEstimator:
             ),
             default=None,
         )
+        if calibration_boundary_slot is not None:
+            boundary_slot = _slot(calibration_boundary_slot)
+            fitting_windows = {r.slot // window for r in rows if r.slot < boundary_slot}
+            later_windows = {r.slot // window for r in rows if r.slot >= boundary_slot}
+            if fitting_windows & later_windows:
+                raise ValueError("calibration boundary divides an evidence window")
+            boundary = boundary_slot if later_windows else None
         diagnostics = {
             "input_count": len(observations),
             "duplicate_count": len(observations) - len(rows),

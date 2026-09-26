@@ -22,6 +22,11 @@ dev = ["pytest>=8.3,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2"]
 [project.scripts]
 cu-pilot = "cu_pilot.cli:app"
 
+[tool.hatch.build]
+# Local toolchains and ledgers must never enter distributions or be traversed.
+skip-excluded-dirs = true
+exclude = ["/work", "/artifacts", "**/target", "**/node_modules"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -31,6 +36,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
 
 [tool.mypy]
