@@ -1,0 +1,3 @@
+method,holdout_rows,accepted,paired_accepted,failed_or_unpaired_accepted,compute_exceedances,data_exceedances,joint_exceedances,qualified_cells,mean_excess_cu,median_excess_cu,p95_excess_cu
+count_missing,704,704,704,0,0,0,0,44,98413.62357954546,98997.5,129274
+count_missing_derivation,704,704,704,0,0,0,0,44,28430.811079545456,27988.5,38948

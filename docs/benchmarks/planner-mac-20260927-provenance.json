@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "experiment_date": "2026-09-27",
+  "scope": "Historical local measurements before integration fixes; current checkout not benchmarked by these results.",
+  "source_base_revision": "8771ef79554301fd7d21e3129a857d214cf977f6",
+  "archive": {
+    "name": "cu-pilot-planner-development-20260927.zip",
+    "sha256": "4fd7951e9a1ff11d6d31fa70e603a6502c8ffb3843f74cd358d4faffe4493714",
+    "raw_evidence_committed": false
+  },
+  "archive_file_sha256": {
+    "changes.patch": "2edfd2f3a55bc2835c4f5803192e8c6d0e664e7fa44a300d26c9dcf7ec7640e1",
+    "metrics.csv": "9143c4ef91c95da63e267c2517f14314f30b72d58b039b0bfb18a667574650ec",
+    "feature-results/metrics.csv": "9c9dfad136950c63428c76158a04350d31e37c446df7962777558229ed2338f3",
+    "evaluation/source-freeze-v2.json": "8225eefa64a066693ebac93571517977633f292856071257d08a43adaf3d8b93",
+    "final-source-manifest.json": "4b70aedbf9c0c9f0edb21dde0ae493894ac376c373031bcd91f2799c455993ee",
+    "feature-plan-v2.json": "2dd12e91d59063cda01ffdab2f26f3477639f5de5766a17332d002090f879f54",
+    "feature-results/evaluation.json": "61163259a68378b9442005855d6112ade788c8e24a421aeae6942b00f3b5e326",
+    "feature-final-state/observations.jsonl": "70ecfb5ba5f9e19640ad86e2bcee30df12b1ca1e3938c79350caa3d1b4b45946",
+    "runtime-assets/payout_queue.so": "a1e04ed95beb488f8c9e28dd493c9a1e150d9439b3f835901bef4d785bebd027"
+  },
+  "copied_aggregate_files": {
+    "planner-mac-20260927.csv": "metrics.csv",
+    "derivation-mac-20260927.csv": "feature-results/metrics.csv"
+  },
+  "planner": {
+    "bank": "local Surfpool 1.5.0",
+    "measured_queues": 84,
+    "payments": 1344,
+    "warmup_queues_excluded": 12,
+    "phases_pooled": false,
+    "seeds": {
+      "natural": 202609271210,
+      "postquarantine": 202609271211
+    },
+    "cu_ceiling": 1400000,
+    "loaded_data_ceiling_bytes": 1048576,
+    "cu_price_micro_lamports": 0,
+    "frozen_bundle_digest": "d0a4f66880039d2cde754cc26557155717e3ea37289578158d37bc0730d2fdc9"
+  },
+  "feature": {
+    "observations": 3520,
+    "fit_calibration_holdout_rows": [
+      1760,
+      1056,
+      704
+    ],
+    "fit_calibration_holdout_cohorts": [
+      40,
+      24,
+      16
+    ],
+    "joint_calibration_risk_bound_threshold": 0.15,
+    "release_authority": false,
+    "applied_to_live_planner": false,
+    "artifact_digest": "01e07e04bf788e4ccb7a6c5c8a205a6223d8c5ced7aef6f2eee77d48808618bd"
+  },
+  "committed_aggregate_sha256": {
+    "planner-mac-20260927.csv": "5886bdbe66e0fde10dbeff910730e77f9f059a4b6df9c25543edd0618bac5bd7",
+    "derivation-mac-20260927.csv": "168c1a54d27c6644e47afed09b154629b79ace93148dbee08193ab9cf1810e06"
+  },
+  "csv_serialization": "Git stores UTF-8 CSVs with LF line endings; archive hashes describe original bytes. Aggregate values are unchanged."
+}

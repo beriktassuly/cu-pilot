@@ -20,6 +20,19 @@ the application owns local signing and submission. Linux and Windows WSL command
 build the program, collect its workload, train/calibrate, explicitly qualify a local
 artifact and run real transfers plus baseline/ablation reports.
 
+The optional [adaptive payout strategy](docs/adaptive-planning.md) compares larger
+freshly simulated batches with smaller eligible predictions while preserving
+quarantine and final message checks. Select it with `--method adaptive` on the
+existing payout `run` or `step` command. The CLI default remains `learned` for
+compatibility; the browser defaults to `always_simulate` and offers an explicit
+strategy selector. Its displayed CU ceiling defaults to 100,000 and can be set
+at startup with `--compute-unit-cap`; this is a ceiling, not a fixed requested limit.
+
+The [dated Mac comparison](docs/benchmarks/planner-mac-20260927.md) records the
+planner improvement and its limits: fewer estimation simulations, no dependable
+latency advantage over always-simulate in that local sample. The separate
+[derivation-feature experiment](docs/derivation-features.md) remains offline.
+
 ```sh
 bash scripts/payouts.sh bootstrap
 bash scripts/payouts.sh build

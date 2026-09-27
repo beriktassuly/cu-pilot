@@ -36,8 +36,9 @@ flowchart LR
 
 `src/cu_pilot/` still owns parsing, generic features, exact-message binding,
 resource quantiles, simulation fallback, immutable profile releases, controls and
-the observation journal. Its only application-driven extension is the optional
-`ResourceEstimator.fit(..., calibration_boundary_slot=...)` argument, which
+the observation journal. The registry's read-only `revision_risk` check also
+guards independently fitted estimates against retirement and artifact quarantine.
+The optional `ResourceEstimator.fit(..., calibration_boundary_slot=...)` argument
 preserves a caller's already frozen grouped split. Its default remains unchanged.
 It rejects a boundary that divides an evidence window. The generic SDK/API/CLI
 does not sign or submit transactions.
@@ -205,6 +206,11 @@ data remains missing. Simulation and execution from one decision are not two
 independent training samples. The default learner fits paired simulation labels.
 
 ## Planning and demonstrated model influence
+
+The original `learned` policy described below remains available. The explicit
+[`adaptive` strategy](adaptive-planning.md) also considers larger simulated
+candidates when a smaller prediction is eligible. Its bounded search, error
+handling, fitted-source safeguards and audit contract are documented separately.
 
 The menu is 1, 2, 4 and 8, plus an exact final tail of 3, 5, 6 or 7. Every method
 uses the same declared constraints: 100,000 CU, 1,048,576 loaded bytes and 1,232
@@ -542,3 +548,40 @@ test-token application is not automatically an RWA platform or DeFi protocol.
 No forms are submitted and no acceptance is promised. Public devnet deployment,
 if an event requires it, remains a separate explicit authorization after local
 verification; an RPC URL alone is not permission to submit transactions.
+
+
+## Strategy selection and measured evidence
+
+The local page offers always-simulate, adaptive, scoped fixed-batch and original
+learned strategies. Always-simulate is the browser default; the application CLI
+keeps its original learned default for compatibility. The active run's choice,
+actual estimate source, fallback reason and candidate probes are visible.
+
+The application defaults to a 100,000-CU ceiling. Configure a different ceiling
+explicitly at startup, for example:
+
+~~~sh
+bash scripts/payouts.sh demo --compute-unit-cap 1400000
+bash scripts/payouts.sh run --method adaptive --compute-unit-cap 1400000
+~~~
+
+The ceiling is shared by all strategies in that process and is recorded with each
+new decision; it is not the CU limit assigned to every transaction. Signing and
+resource checks remain mandatory. A pending signed transaction is reconciled
+under its original decision before new settings affect later plans.
+
+See [adaptive planning](adaptive-planning.md) for the lifecycle and fallback rules,
+and the [dated Mac comparison](benchmarks/planner-mac-20260927.md) for the measured
+results and compact CSVs. Those measurements used an explicit 1.4M ceiling and
+predate the integration fixes. Raw datasets, journals, runtime binaries and frozen
+model artifacts are kept outside Git. The separate derivation-feature result is
+offline research; it is not the model used by the browser.
+
+
+After building, run the isolated HTTP integration check with
+`PYTHONPATH=. .venv/bin/python tests/integration/payout_demo.py`. It creates its own
+temporary bank, exercises both adaptive fallback and always-simulate through the
+demo API, verifies balances and signed transaction limits, then stops its own
+services. It requires no trained model and writes a compact ignored report to
+`artifacts/payouts/demo-verification.json`. CI runs it before the separate
+collection/training bank. This functional smoke test is not a latency benchmark.
