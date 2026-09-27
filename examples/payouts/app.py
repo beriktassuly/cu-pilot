@@ -43,6 +43,17 @@ DATA_CAP = 1_048_576
 MAX_ATTEMPTS = 2
 SOL_ALLOWANCE = 50_000_000
 MENU = (1, 2, 4, 8)
+METHODS = (
+    "learned",
+    "adaptive",
+    "always_simulate",
+    "fixed_batch",
+    "scoped_fixed_batch",
+    "formula",
+    "pattern_p99",
+    "cache",
+    "fixed_estimate_ablation",
+)
 
 
 def canonical(value: Any) -> str:
@@ -136,7 +147,12 @@ class MeasuredRpc(RpcClient):
 
 
 class Application:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, compute_unit_cap: int | None = None):
+        if compute_unit_cap is not None and (
+            type(compute_unit_cap) is not int or not 1 <= compute_unit_cap <= 1_400_000
+        ):
+            raise ValueError("compute unit cap must be an integer from 1 through 1400000")
+        self._compute_unit_cap = compute_unit_cap
         self.directory = directory
         directory.mkdir(parents=True, exist_ok=True)
         self.bridge = Bridge(directory / "runtime.json")
@@ -155,6 +171,8 @@ class Application:
             CREATE TABLE IF NOT EXISTS payout_steps(
                 id TEXT PRIMARY KEY,queue TEXT NOT NULL,body TEXT NOT NULL,
                 phase TEXT NOT NULL,signature TEXT,wire TEXT,outcome TEXT);
+            CREATE TABLE IF NOT EXISTS payout_planning_attempts(
+                id TEXT PRIMARY KEY,queue TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL);
         """)
         old = self.setting("instance")
         if old is not None and old != self.info["instance_id"]:
@@ -171,6 +189,15 @@ class Application:
             from examples.payouts.model import PayoutModelBundle
 
             self.bundle = PayoutModelBundle.load(bundle_path)
+
+    @property
+    def compute_unit_cap(self) -> int:
+        configured = getattr(self, "_compute_unit_cap", None)
+        return CU_CAP if configured is None else configured
+
+    @property
+    def loaded_data_cap(self) -> int:
+        return DATA_CAP
 
     def setting(self, key: str) -> Any:
         row = self.store.db.execute(
@@ -239,6 +266,21 @@ class Application:
                 reason="confirmed_resource_budget_exhaustion",
                 current_slot=transaction["slot"],
             )
+        invalidation_key = body.get("baseline_invalidation_key")
+        if invalidation_key:
+            invalidated = self.setting("fitted_baseline_invalidations") or {}
+            invalidated.setdefault(
+                invalidation_key,
+                {
+                    "method": body["method"],
+                    "count": body["chosen_count"],
+                    "decision_id": body["id"],
+                    "slot": transaction["slot"],
+                    "reason": "confirmed_resource_budget_exhaustion",
+                    "resource": exhausted,
+                },
+            )
+            self.set_setting("fitted_baseline_invalidations", invalidated)
         return True
 
     def envelope(self, candidate: dict[str, Any]):
@@ -628,6 +670,161 @@ class Application:
             full_preparation_ms=plan.preparation_ms,
         )
 
+    def _adaptive_selection(self, queue, identifier, options, plans, candidates):
+        """Largest verified prefix, with one bounded decision per exact candidate.
+
+        A successful over-cap measurement permits shrinking. An unknown or failed
+        simulation never proves that ignoring part of an approved prefix is safe.
+        """
+        if (
+            not options
+            or len(options) > len(MENU)
+            or [o["count"] for o in options] != sorted({o["count"] for o in options}, reverse=True)
+        ):
+            raise ValueError("adaptive selection requires a bounded descending candidate menu")
+        started = time.perf_counter()
+        calls_before = self.rpc.call_count + self.bridge.rpc_calls
+        methods_before = self.rpc.method_counts + self.bridge.method_counts
+        retries_before = self.rpc.retry_count
+        audit = {
+            "policy": "largest-verified-prefix-v1",
+            "objective": "largest feasible approved prefix, not a universal latency/cost optimum",
+            "max_simulation_probes": len(MENU),
+            "compute_unit_cap": self.compute_unit_cap,
+            "loaded_data_cap": self.loaded_data_cap,
+            "candidate_counts": [o["count"] for o in options],
+            "probes": [],
+            "selected_count": None,
+            "limit_source": None,
+            "estimation_simulations": 0,
+            "control_simulations": 0,
+        }
+
+        def persist(status):
+            audit["selection_ms"] = (time.perf_counter() - started) * 1000
+            audit["rpc_calls"] = self.rpc.call_count + self.bridge.rpc_calls - calls_before
+            audit["rpc_method_counts"] = dict(
+                self.rpc.method_counts + self.bridge.method_counts - methods_before
+            )
+            audit["rpc_retries"] = self.rpc.retry_count - retries_before
+            with self.store.db:
+                self.store.db.execute(
+                    "INSERT INTO payout_planning_attempts VALUES(?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET body=excluded.body,status=excluded.status",
+                    (identifier, queue, canonical(audit), status),
+                )
+
+        persist("planning")
+        try:
+            for option in options:
+                plan = plans[option["count"]]
+                probe = {
+                    "count": option["count"],
+                    "observation_id": plan.observation_id,
+                    "prepared_identity": plan.prepared_identity,
+                    "prediction_reason": option["reason"],
+                }
+                audit["probes"].append(probe)
+                if not candidates[option["count"]]["supported"]:
+                    probe["reason"] = "unsupported_account_state"
+                    raise RuntimeError("adaptive planning stopped: unsupported account state")
+                structural = (
+                    "unsupported_transaction_version"
+                    if option["version"] != "legacy"
+                    else "transaction_too_large"
+                    if option["serialized_size"] > 1232
+                    else "too_many_accounts"
+                    if option["account_count"] > 64
+                    else None
+                )
+                if structural:
+                    probe.update(status="rejected", reason=structural)
+                    persist("planning")
+                    continue
+                use_prediction = bool(
+                    option["eligible"]
+                    and option["limits"]
+                    and option["limits"][0] <= self.compute_unit_cap
+                    and option["limits"][1] <= self.loaded_data_cap
+                )
+                probe["requested_source"] = (
+                    "qualified_learned_prediction" if use_prediction else "fresh_simulation"
+                )
+                persist("planning")
+                trial = execute_decision(
+                    plan,
+                    rpc=self.rpc,
+                    registry=self.registry,
+                    force_simulation=not use_prediction,
+                    current_slot=self.rpc.get_slot(),
+                )
+                control_calls = int(plan.control_selected and trial.resource_simulation_calls > 0)
+                audit["control_simulations"] += control_calls
+                audit["estimation_simulations"] += trial.resource_simulation_calls - control_calls
+                probe.update(
+                    status=trial.status,
+                    reason=trial.reason,
+                    compute_unit_limit=trial.compute_unit_limit,
+                    loaded_accounts_data_size_limit=trial.loaded_accounts_data_size_limit,
+                    resource_simulation_calls=trial.resource_simulation_calls,
+                    control_simulations=control_calls,
+                    simulation_failure=trial.simulation_failure,
+                    final_identity=trial.final_identity,
+                )
+                self.store.finish(
+                    plan.observation_id,
+                    trial.model_dump(mode="json"),
+                    stream="payout-execution",
+                    cursor=0,
+                )
+                record_control_outcome(trial, self.registry)
+                if trial.status == "unresolved":
+                    failure = trial.simulation_failure or {}
+                    # The RPC adapter emits this code only after a successful
+                    # simulation whose padded resource demand exceeds runtime limits.
+                    if (
+                        trial.reason == "resource_cap_exceeded"
+                        and failure.get("success") is True
+                        and type(failure.get("compute_units")) is int
+                        and type(failure.get("loaded_accounts_bytes")) is int
+                    ):
+                        probe["rejection"] = "measured_resource_cap"
+                        persist("planning")
+                        continue
+                    raise RuntimeError("adaptive planning stopped: " + trial.reason)
+                if (
+                    trial.compute_unit_limit is None
+                    or trial.loaded_accounts_data_size_limit is None
+                ):
+                    raise RuntimeError("adaptive planning stopped: missing paired limits")
+                if trial.compute_unit_limit > self.compute_unit_cap or (
+                    trial.loaded_accounts_data_size_limit > self.loaded_data_cap
+                ):
+                    if trial.status != "simulation_success" or trial.simulation is None:
+                        raise RuntimeError("adaptive revalidated prediction exceeds policy; replan")
+                    probe["rejection"] = (
+                        "compute_policy_cap"
+                        if trial.compute_unit_limit > self.compute_unit_cap
+                        else "loaded_data_policy_cap"
+                    )
+                    persist("planning")
+                    continue
+                audit["selected_count"] = option["count"]
+                audit["limit_source"] = (
+                    "qualified_learned_prediction"
+                    if trial.status == "accepted_prediction"
+                    else "fresh_simulation"
+                )
+                audit["reason"] = "largest_verified_feasible_prefix"
+                persist("selected")
+                return trial, option, audit
+            raise RuntimeError("no verified adaptive candidate fits fixed limits; worker paused")
+        except BaseException:
+            # Do not copy arbitrary provider exception text into the journal.
+            audit["reason"] = "selection_stopped_without_submission"
+            persist("stopped")
+            raise
+
     def step(
         self,
         queue: str,
@@ -637,6 +834,9 @@ class Application:
         interrupt_after_send: bool = False,
         count_cap: int | None = None,
     ):
+        if method not in METHODS:
+            raise ValueError("unknown payout strategy: " + method)
+        estimate_method = "fixed_batch" if method == "scoped_fixed_batch" else method
         started = time.perf_counter()
         calls_before = self.rpc.call_count + self.bridge.rpc_calls
         methods_before = self.rpc.method_counts + self.bridge.method_counts
@@ -682,11 +882,17 @@ class Application:
         )
         if count_cap is not None:
             counts = [count for count in counts if count <= count_cap]
-        if method == "fixed_batch" and self.baselines:
+        if method == "scoped_fixed_batch" and not self.baselines:
+            raise RuntimeError("scoped fixed batch requires a fitted baseline artifact")
+        if estimate_method == "fixed_batch" and self.baselines:
             cap = self.baselines.get("fixed_batch_count")
             if cap is None:
                 raise RuntimeError("fixed batch has no supported fitting count")
             counts = [count for count in counts if count <= cap]
+            if method == "scoped_fixed_batch":
+                counts = [count for count in counts if count == min(cap, remaining)]
+                if not counts:
+                    raise RuntimeError("count constraint excludes the scoped fixed batch")
         self.refresh(q["slot"])
         identifier = uuid.uuid4().hex
         model_digest = self.bundle.digest if self.bundle is not None else "0" * 64
@@ -725,7 +931,7 @@ class Application:
                     deployment_bindings=self.deployment_bindings,
                     prepared_identity=state.prepared_identity,
                 )
-            if method != "learned":
+            if method not in {"learned", "adaptive"}:
                 profile, estimator = None, None
             plan = prepare_decision(
                 candidate["wire"],
@@ -736,29 +942,53 @@ class Application:
                 registry=self.registry,
             )
             limits = None
+            baseline_key = None
+            baseline_reason = None
             eligible = (
                 not plan.prediction.simulation_recommended
                 and plan.eligibility_reason == plan.prediction.reason
             )
-            if method == "learned" and eligible:
+            if method in {"learned", "adaptive"} and eligible:
                 limits = (
                     plan.prediction.compute_unit_limit,
                     plan.prediction.loaded_accounts_data_size_limit,
                 )
             elif method == "fixed_estimate_ablation":
-                limits = (20_000 + 25_000 * count, DATA_CAP)
-            elif method in {"fixed_batch", "formula", "pattern_p99", "cache"}:
-                from examples.payouts.baselines import baseline_estimate
+                limits = (20_000 + 25_000 * count, self.loaded_data_cap)
+            elif estimate_method in {"fixed_batch", "formula", "pattern_p99", "cache"}:
+                from examples.payouts.baselines import (
+                    baseline_estimate,
+                    baseline_invalidation_key,
+                    fitted_baseline_risk,
+                )
 
+                invalidated = self.setting("fitted_baseline_invalidations") or {}
                 limits = baseline_estimate(
-                    method,
+                    estimate_method,
                     self.bundle,
                     state,
                     plan.features,
                     current_slot=candidate["slot"],
                     cache=self.setting("estimate_cache") or {},
                     fitted_baselines=self.baselines,
+                    registry=self.registry,
+                    invalidated_keys=invalidated,
                 )
+                if estimate_method in {"fixed_batch", "formula"} and self.bundle and self.baselines:
+                    baseline_key = baseline_invalidation_key(
+                        estimate_method, self.bundle, self.baselines, count
+                    )
+                    if limits is None:
+                        baseline_reason = fitted_baseline_risk(
+                            estimate_method,
+                            self.bundle,
+                            state,
+                            plan.features,
+                            current_slot=candidate["slot"],
+                            fitted_baselines=self.baselines,
+                            registry=self.registry,
+                            invalidated_keys=invalidated,
+                        )
             if not candidate["supported"] or recovery_simulation:
                 limits = None
                 eligible = False
@@ -776,6 +1006,9 @@ class Application:
                 "version": plan.features.version,
                 "snapshot_digest": candidate["snapshot_digest"],
             }
+            if baseline_key is not None:
+                option["baseline_invalidation_key"] = baseline_key
+                option["baseline_scope_reason"] = baseline_reason or "scoped_fitting_evidence"
             # Commit the exact prediction before any simulation or outcome.
             self.store.ingest(request_id, {"candidate": option, "method": method})
             self.store.freeze_plan(request_id, plan.model_dump(mode="json"))
@@ -787,8 +1020,8 @@ class Application:
             o
             for o in options
             if o["limits"]
-            and o["limits"][0] <= CU_CAP
-            and o["limits"][1] <= DATA_CAP
+            and o["limits"][0] <= self.compute_unit_cap
+            and o["limits"][1] <= self.loaded_data_cap
             and o["serialized_size"] <= 1232
             and o["account_count"] <= 64
             and o["version"] == "legacy"
@@ -797,7 +1030,14 @@ class Application:
         used_predicted_candidate = selected is not None
         decision = None
         simulations = controls = 0
-        if selected is not None:
+        planning_audit = None
+        if method == "adaptive":
+            decision, selected, planning_audit = self._adaptive_selection(
+                queue, identifier, options, plans, candidates
+            )
+            simulations = planning_audit["estimation_simulations"]
+            controls = planning_audit["control_simulations"]
+        elif selected is not None:
             plan = plans[selected["count"]]
             if method == "learned":
                 decision = execute_decision(
@@ -835,16 +1075,16 @@ class Application:
                 )
                 if (
                     trial.status != "unresolved"
-                    and trial.compute_unit_limit <= CU_CAP
-                    and trial.loaded_accounts_data_size_limit <= DATA_CAP
+                    and trial.compute_unit_limit <= self.compute_unit_cap
+                    and trial.loaded_accounts_data_size_limit <= self.loaded_data_cap
                 ):
                     decision, selected = trial, option
                     break
         if decision is None or selected is None or decision.status == "unresolved":
             raise RuntimeError("no verified candidate fits fixed limits; worker paused")
         if (
-            decision.compute_unit_limit > CU_CAP
-            or decision.loaded_accounts_data_size_limit > DATA_CAP
+            decision.compute_unit_limit > self.compute_unit_cap
+            or decision.loaded_accounts_data_size_limit > self.loaded_data_cap
         ):
             raise RuntimeError("revalidated estimate exceeds fixed policy; replan")
         if method == "learned" and used_predicted_candidate:
@@ -862,6 +1102,8 @@ class Application:
             "queue": queue,
             "cursor": q["cursor"],
             "method": method,
+            "compute_unit_cap": self.compute_unit_cap,
+            "loaded_data_cap": self.loaded_data_cap,
             "model_digest": model_digest,
             "chosen_count": selected["count"],
             "options": options,
@@ -874,6 +1116,19 @@ class Application:
             "recovery_simulation": recovery_simulation,
             "inference_and_candidate_ms": inference_ms,
         }
+        if planning_audit is not None:
+            body["adaptive_planning"] = planning_audit
+        body["limit_source"] = (
+            "fresh_simulation"
+            if decision.status == "simulation_success"
+            else "qualified_learned_prediction"
+            if method in {"learned", "adaptive"}
+            else "scoped_fitted_estimate"
+            if estimate_method in {"fixed_batch", "formula"}
+            else "application_baseline_estimate"
+        )
+        if decision.status == "accepted_prediction" and selected.get("baseline_invalidation_key"):
+            body["baseline_invalidation_key"] = selected["baseline_invalidation_key"]
         if method == "cache":
             from examples.payouts.baselines import cache_key, update_cache
             from examples.payouts.model import PayoutStateEnvelope
@@ -908,6 +1163,34 @@ class Application:
         self.refresh(fresh["slot"])
         if self.deployment_bindings != selected["state"]["deployment_bindings"]:
             raise RuntimeError("deployment evidence changed after estimation; replan")
+        if decision.status == "accepted_prediction" and estimate_method in {
+            "fixed_batch",
+            "formula",
+        }:
+            from examples.payouts.baselines import baseline_estimate, baseline_invalidation_key
+            from examples.payouts.model import PayoutStateEnvelope
+
+            if self.bundle is None or self.baselines is None:
+                raise RuntimeError("fitted source disappeared before signing; replan")
+            current_key = baseline_invalidation_key(
+                estimate_method, self.bundle, self.baselines, selected["count"]
+            )
+            current_limits = baseline_estimate(
+                estimate_method,
+                self.bundle,
+                PayoutStateEnvelope.model_validate(selected["state"]),
+                decision.plan.features,
+                current_slot=fresh["slot"],
+                cache={},
+                fitted_baselines=self.baselines,
+                registry=self.registry,
+                invalidated_keys=self.setting("fitted_baseline_invalidations") or {},
+            )
+            if current_key != body.get("baseline_invalidation_key") or current_limits != (
+                decision.compute_unit_limit,
+                decision.loaded_accounts_data_size_limit,
+            ):
+                raise RuntimeError("fitted source changed or invalidated before signing; replan")
         if decision.status == "accepted_prediction" and decision.plan.profile_id:
             check = self.registry.check(
                 decision.plan.profile_id,
@@ -1024,6 +1307,8 @@ class Application:
             if result.get("stopped") or verified.get("queue", {}).get("status") == 1:
                 return {
                     "method": method,
+                    "compute_unit_cap": self.compute_unit_cap,
+                    "loaded_data_cap": self.loaded_data_cap,
                     "steps": results,
                     "verification": verified,
                     "queue_completion_ms": (time.perf_counter() - started) * 1000,
@@ -1044,12 +1329,20 @@ def main() -> None:
     parser.add_argument("--length", type=int, default=16)
     parser.add_argument("--existing", type=int, default=0)
     parser.add_argument("--queue")
-    parser.add_argument("--method", default="learned")
+    parser.add_argument("--method", choices=METHODS, default="learned")
+    parser.add_argument(
+        "--compute-unit-cap",
+        type=int,
+        default=CU_CAP,
+        help="Application ceiling from 1 to 1400000 CU; does not set every transaction's limit",
+    )
     parser.add_argument(
         "--verbose-json", action="store_true", help="Print the complete saved trace"
     )
     args = parser.parse_args()
-    app = Application(args.directory)
+    if not 1 <= args.compute_unit_cap <= 1_400_000:
+        parser.error("--compute-unit-cap must be from 1 through 1400000")
+    app = Application(args.directory, compute_unit_cap=args.compute_unit_cap)
     try:
         if args.command == "info":
             result = app.info
@@ -1074,6 +1367,8 @@ def main() -> None:
             printed = {
                 "queue": queue_state.get("address"),
                 "method": args.method,
+                "compute_unit_cap": app.compute_unit_cap,
+                "loaded_data_cap": app.loaded_data_cap,
                 "executed_counts": [step["chosen_count"] for step in steps if step.get("success")],
                 "failed_attempts": sum(step.get("success") is False for step in steps),
                 "completed": queue_state.get("paid_count"),

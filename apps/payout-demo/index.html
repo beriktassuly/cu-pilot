@@ -22,9 +22,11 @@
 <body>
   <div class="shell">
     <header class="masthead"><div class="brand"><i class="mark" aria-hidden="true"></i>CU Pilot<span>Payout reference</span></div><div id="connection" class="tag"><i class="dot" aria-hidden="true"></i><span>Connecting to local runtime</span></div></header>
-    <section class="hero" aria-labelledby="title"><div><p class="eyebrow">Fixed authority. Adaptive execution.</p><h1 id="title">Approve the payments.<br>Let the queue move.</h1></div><p class="intro">A learned resource estimate chooses the next batch. The program enforces the recipients and amounts you approved.<br><strong>Isolated local Solana · test tokens only.</strong></p></section>
+    <section class="hero" aria-labelledby="title"><div><p class="eyebrow">Fixed authority. Adaptive execution.</p><h1 id="title">Approve the payments.<br>Let the queue move.</h1></div><p class="intro">Choose how to prepare each batch: simulate its resources or use a qualified estimate with fallback. The program enforces the recipients and amounts you approved.<br><strong>Isolated local Solana · test tokens only.</strong></p></section>
     <div id="notice" class="notice" role="alert" hidden></div>
-    <div class="toolbar"><label for="queue-select"><span class="eyebrow">Approved queue</span><select id="queue-select" disabled><option>No funded queues</option></select></label><button id="new-queue" class="primary" disabled>Review a new queue <span aria-hidden="true">↗</span></button></div>
+    <div class="toolbar"><label for="queue-select"><span class="eyebrow">Approved queue</span><select id="queue-select" disabled><option>No funded queues</option></select></label><label for="strategy"><span class="eyebrow">Execution strategy</span><select id="strategy" disabled><option value="always_simulate">Always simulate</option><option value="adaptive">Adaptive · estimate with fallback</option><option value="scoped_fixed_batch">Scoped fixed batch</option><option value="learned">Previous learned planner</option></select></label><button id="new-queue" class="primary" disabled>Review a new queue <span aria-hidden="true">↗</span></button></div>
+
+    <p id="policy-note" class="control-note" style="margin-bottom:20px">Loading the application resource ceiling.</p>
 
     <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
       <div class="approval-top"><div><p class="eyebrow muted">01 / Owner approval</p><h2 id="approval-title">Review immutable payment terms</h2></div><button id="cancel-draft" class="small subtle">Close review</button></div>
@@ -38,7 +40,7 @@
         <section class="panel" aria-labelledby="payments-title"><div class="panel-head"><div><p class="eyebrow">02 / Approved obligations</p><h2 id="payments-title">Payment ledger</h2></div><span id="queue-status" class="pill pending">No queue</span></div><div id="empty-ledger" class="empty"><h2>Every payment starts<br>with your approval.</h2><p>Review a list of local test recipients and fund its vault. Live balances appear here as each batch confirms.</p></div><div id="ledger-wrap" class="table-wrap" hidden><table><thead><tr><th>Recipient</th><th class="numeric">Approved</th><th class="numeric">Verified balance</th><th>Status</th></tr></thead><tbody id="payment-rows"></tbody></table></div><p class="token-note">Amounts are integer token units. This test asset is not USDC and represents no real-world asset.</p></section>
         <section class="panel" aria-labelledby="progress-title"><div class="panel-head"><div><p class="eyebrow">03 / Local execution</p><h2 id="progress-title">Queue progress</h2></div><span id="worker-status" class="tag">Worker stopped</span></div><div class="panel-body"><div class="metrics"><div><div class="big"><span id="paid">0</span><small> / <span id="total">0</span></small></div><p class="caption">Verified paid obligations</p></div><div><div id="pending" class="big">0</div><p class="caption">Still pending</p></div></div><div id="progress" class="progress" role="progressbar" aria-label="Paid obligations" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><span style="width:0%"></span></div><div class="controls"><button id="start" class="primary" disabled>Start worker</button><button id="stop" class="subtle" disabled>Stop worker</button><button id="pause" class="subtle" disabled>Pause on chain</button></div><p class="control-note">Stopping the worker prevents its next action. Pausing on chain makes the program reject execution until the owner resumes it.</p><hr class="rule"><dl class="facts"><dt>Payment verification</dt><dd id="verification">Awaiting a queue</dd><dt>Cursor / paid count</dt><dd id="cursor">—</dd><dt>Vault token balance</dt><dd id="vault">—</dd><dt>Duplicate payments</dt><dd id="duplicates">—</dd></dl><div class="state-action"><p>Change the next recipient’s account state before the next decision.</p><button id="create-ata" class="small subtle" disabled>Create next token account</button></div></div></section>
       </div>
-      <section class="panel decision" aria-labelledby="decision-title"><div class="panel-head"><div><p class="eyebrow">04 / Estimate → decision → transfer</p><h2 id="decision-title">Latest execution decision</h2></div><span id="decision-mode" class="pill pending">Awaiting decision</span></div><div class="panel-body"><div class="decision-grid"><div class="choice"><div id="chosen" class="big">—</div><p class="caption">Chosen batch count</p><span id="tx-status" class="tag">No transaction yet</span></div><div><p id="reason" class="reason">Starting the worker evaluates the supported contiguous prefixes under the same resource limits. Each decision is saved before execution.</p><div id="candidates" class="candidates" aria-label="Evaluated candidate batches"></div></div></div><div class="trace"><div><span class="eyebrow muted">Transaction signature</span><code id="signature">—</code></div><div><span class="eyebrow muted">Prediction / measured execution</span><p id="resources" class="caption">Resource measurements appear after reconciliation.</p></div></div></div></section>
+      <section class="panel decision" aria-labelledby="decision-title"><div class="panel-head"><div><p class="eyebrow">04 / Estimate → decision → transfer</p><h2 id="decision-title">Latest execution decision</h2></div><span id="decision-mode" class="pill pending">Awaiting decision</span></div><div class="panel-body"><div class="decision-grid"><div class="choice"><div id="chosen" class="big">—</div><p class="caption">Chosen batch count</p><span id="tx-status" class="tag">No transaction yet</span></div><div><p id="reason" class="reason">Starting the worker evaluates the supported contiguous prefixes under the same resource limits. Each decision is saved before execution.</p><div id="candidates" class="candidates" aria-label="Evaluated candidate batches"></div></div></div><p id="planning-summary" class="caption" aria-live="polite">Planning counters appear after execution.</p><div class="trace"><div><span class="eyebrow muted">Transaction signature</span><code id="signature">—</code></div><div><span class="eyebrow muted">Prediction / measured execution</span><p id="resources" class="caption">Resource measurements appear after reconciliation.</p></div></div></div></section>
     </main>
     <footer class="footer"><div>CU Pilot’s reusable core prepares unsigned transactions.<br>This local reference application owns test signing and execution.</div><div>Test mint <code id="mint">—</code><br>Program <code id="program">—</code></div></footer>
     <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
@@ -52,6 +54,8 @@
     $('signature').closest('.trace').after(history);
     let state = null, selected = '', draft = null, busy = false, refreshing = false, lastRender = '', stateError = '', connectionError = '', optionKey = '';
     const format = value => value === undefined || value === null ? '—' : String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const strategyLabels = {always_simulate:'Always simulate',adaptive:'Adaptive',scoped_fixed_batch:'Scoped fixed batch',learned:'Previous learned planner'};
+    const sourceLabels = {fresh_simulation:'Simulation',qualified_learned_prediction:'Qualified learned estimate',scoped_fitted_estimate:'Scoped fitted estimate',application_baseline_estimate:'Baseline estimate'};
     const queueOf = value => value?.queue && typeof value.queue === 'object' ? value.queue : value;
     const entries = () => state?.queues ?? [];
     const current = () => entries().find(item => queueOf(item)?.address === selected) ?? null;
@@ -78,6 +82,7 @@
       const q = queueOf(current()), running = !!state?.worker?.running, active = q && Number(q.status) === 0;
       $('new-queue').disabled = !state || busy;
       $('queue-select').disabled = !entries().length || busy;
+      $('strategy').disabled = !state || busy || running;
       $('start').disabled = busy || !active || q.paused || running;
       $('step').disabled = busy || !active || q.paused || running;
       $('stop').disabled = busy || !running;
@@ -103,6 +108,9 @@
       }
       $('queue-select').value = selected;
       const item = current(), q = queueOf(item), verify = item?.verification ?? item;
+      if (state.worker?.running && strategyLabels[state.worker.method]) $('strategy').value=state.worker.method;
+      const policy=state.resource_policy??{};
+      $('policy-note').textContent=`Every strategy uses the same ceiling: ${format(policy.compute_unit_cap)} CU and ${format(policy.loaded_data_cap)} loaded-data bytes per transaction. Change the ceiling explicitly when starting the local service. A strategy never raises it automatically.`;
       $('mint').textContent = state.info?.mint ?? '—'; $('program').textContent = state.info?.program ?? '—';
       $('empty-ledger').hidden = !!q; $('ledger-wrap').hidden = !q;
       $('queue-status').textContent = !q ? 'No queue' : q.status === 2 ? 'Refunded' : q.status === 1 ? 'Completed' : q.paused ? 'Paused on chain' : 'Ready';
@@ -130,12 +138,15 @@
       if (last && Object.keys(last).length && (!last.queue || last.queue === selected)) {
         $('chosen').textContent = format(last.chosen_count ?? last.count);
         const mode=String(last.mode ?? last.source ?? 'Recorded decision');
-        $('decision-mode').textContent = ['model','learned','prediction'].includes(mode) ? 'Learned estimate' : mode.includes('simulat') || mode === 'fallback' ? 'Simulation fallback' : mode;
+        const source=last.limit_source??(mode==='fallback'?'fresh_simulation':'');
+        $('decision-mode').textContent = sourceLabels[source]??(['model','learned','prediction'].includes(mode)?'Recorded estimate':mode);
+        const planning=last.adaptive_planning;
+        $('planning-summary').textContent=`Strategy: ${strategyLabels[last.method]??last.method??'Previously recorded'}. Estimation simulations: ${format(last.estimation_simulations)}. Control simulations: ${format(last.control_simulations)}. RPC calls: ${format(last.rpc_calls)}.${last.compute_unit_cap?` Decision ceiling: ${format(last.compute_unit_cap)} CU.`:''}${planning?` Checked ${format(planning.probes?.length)} candidate(s), at most ${format(planning.max_simulation_probes)}.`:''}`;
         $('reason').textContent = last.reason==='forced_simulation'?'A bounded simulation verified the resources for this batch.':String(last.reason??'Decision recorded.').replaceAll('_',' ');
         $('reason').title=last.reason??'';$('signature').textContent = last.signature ?? 'Awaiting submission';
         const failed=last.success===false || last.phase==='failed';
         $('tx-status').textContent = failed ? 'Failed — no payments advanced' : last.verification?.correct === true ? 'Confirmed & verified' : last.signature ? 'Submitted / reconciling' : 'Prepared';
-        const candidates=last.options ?? last.candidates ?? []; $('candidates').replaceChildren();
+        const candidates=last.adaptive_planning?.probes ?? last.options ?? last.candidates ?? []; $('candidates').replaceChildren();
         for (const candidate of (Array.isArray(candidates)?candidates:Object.values(candidates))) {
           const node=document.createElement('div'); node.className=`candidate ${candidate.count===(last.chosen_count??last.count)?'chosen':''}`;
           const title=document.createElement('strong');title.textContent=`${candidate.count} payment${candidate.count===1?'':'s'}`;node.append(title);
@@ -143,23 +154,24 @@
           const cu=candidate.limits?.[0] ?? estimate.cu_limit ?? estimate.compute_units ?? estimate.cu ?? estimate.compute_unit_limit;
           const loaded=candidate.limits?.[1] ?? estimate.loaded_accounts_bytes ?? estimate.loaded_data ?? estimate.loaded ?? estimate.loaded_accounts_data_size_limit;
           node.append(label(cu===undefined?'No qualified estimate':`${format(cu)} CU · ${format(loaded)} bytes`,''));
-          const detail=document.createElement('small');detail.textContent=String(candidate.reason ?? (candidate.feasible===false || candidate.eligible===false?'Outside policy':'Candidate evaluated')).replaceAll('_',' ');node.append(detail);$('candidates').append(node);
+          const detail=document.createElement('small');detail.textContent=String(candidate.rejection ?? candidate.reason ?? (candidate.feasible===false || candidate.eligible===false?'Outside policy':'Candidate evaluated')).replaceAll('_',' ');node.append(detail);$('candidates').append(node);
         }
         const estimate=last.estimate??last.prediction??last.decision??{}; const actual=last.actual??last.outcome??{};
-        const resourceSource=mode==='fallback'?'simulation limit':'prediction limit';
+        const resourceSource=source==='fresh_simulation'?'simulation limit':source==='scoped_fitted_estimate'?'fitted limit':'estimate limit';
         const observation=failed?'observed before failure':'observed';
         $('resources').textContent=`${failed?'Failed attempt: usage is censored and does not establish successful batch demand. ':''}CU: ${format(estimate.compute_unit_limit??estimate.cu_limit??estimate.cu??last.cu_limit)} ${resourceSource} / ${format(actual.compute_units??actual.computeUnitsConsumed??last.compute_units)} ${observation}. Loaded data: ${format(estimate.loaded_accounts_data_size_limit??estimate.loaded_accounts_bytes??estimate.loaded??last.loaded_limit)} ${resourceSource} / ${format(actual.loaded_accounts_bytes??actual.loadedAccountsDataSize??last.loaded_accounts_bytes)} ${observation}.`;
       } else {
         $('chosen').textContent='—';$('decision-mode').textContent='Awaiting decision';$('signature').textContent='—';$('tx-status').textContent='No transaction yet';$('candidates').replaceChildren();
         $('reason').textContent='Starting the worker evaluates the supported contiguous prefixes under the same resource limits. Each decision is saved before execution.';
         $('resources').textContent='Resource measurements appear after reconciliation.';
+        $('planning-summary').textContent='Planning counters appear after execution.';
       }
       if (state.worker?.error) notice(state.worker.error);
       else if (stateError && $('notice').textContent===stateError) notice();
       stateError=state.worker?.error??'';
       $('history-rows').replaceChildren();
       for (const entry of (state.history??[]).filter(entry=>!entry.queue||entry.queue===selected)) {
-        const row=document.createElement('tr');cell(row,`${entry.chosen_count??'—'} / ${entry.mode==='prediction'?'learned':entry.mode??entry.phase??'recorded'}`);
+        const row=document.createElement('tr');cell(row,`${entry.chosen_count??'—'} / ${sourceLabels[entry.limit_source]??entry.mode??entry.phase??'recorded'}`);
         const progress=entry.verification?.queue,failed=entry.success===false || entry.phase==='failed';cell(row,failed?'Failed — no payments advanced':Number.isInteger(progress?.cursor)?`${progress.cursor}/${progress.length} paid`:entry.success===true?'Confirmed':entry.phase??'Recorded');cell(row,entry.signature??'—','mono');$('history-rows').append(row);
       }
       history.hidden=!$('history-rows').children.length;
@@ -206,8 +218,8 @@
       $('approval').hidden=true;draft=null;announce('Owner approved and funded the test queue.');
     }));
     $('queue-select').addEventListener('change',()=>{selected=$('queue-select').value;lastRender='';render();});
-    $('start').addEventListener('click',()=>action(async()=>{await api('/api/start',{queue:selected});announce('Local worker started.');}));
-    $('step').addEventListener('click',()=>action(async()=>{await api('/api/step',{queue:selected});announce('One batch executed and reconciled.');}));
+    $('start').addEventListener('click',()=>action(async()=>{await api('/api/start',{queue:selected,method:$('strategy').value});announce('Local worker started.');}));
+    $('step').addEventListener('click',()=>action(async()=>{await api('/api/step',{queue:selected,method:$('strategy').value});announce('One batch executed and reconciled.');}));
     $('stop').addEventListener('click',()=>action(async()=>{await api('/api/stop',{});announce('Worker stopped. The on-chain pause flag is unchanged.');}));
     $('pause').addEventListener('click',()=>action(async()=>{const paused=!queueOf(current()).paused;await api('/api/pause',{queue:selected,paused});announce(paused?'Program paused on chain.':'Program resumed on chain.');}));
     $('create-ata').addEventListener('click',()=>action(async()=>{await api('/api/ata',{queue:selected,index:Number(queueOf(current()).cursor)});announce('Next recipient token account created; the next plan will read the changed state.');}));

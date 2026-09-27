@@ -246,6 +246,7 @@ class ProfileRegistry:
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL,
                     id TEXT NOT NULL, revision INTEGER, action TEXT NOT NULL,
                     actor TEXT NOT NULL, reason TEXT NOT NULL, slot TEXT);
+                CREATE INDEX IF NOT EXISTS audit_profile_action ON audit(id,action);
                 CREATE TABLE IF NOT EXISTS controls (
                     request_id TEXT PRIMARY KEY, selection TEXT NOT NULL, outcome TEXT);
                 CREATE TABLE IF NOT EXISTS executions (
@@ -690,6 +691,60 @@ class ProfileRegistry:
                     reason=reason or "active",
                 ),
             )
+
+    def revision_risk(
+        self,
+        profile_id: str,
+        revision: int,
+        *,
+        artifact_sha256: str,
+        calibration_min_slot: int | None,
+    ) -> str | None:
+        """Read withdrawal history for an exact artifact, independently of release.
+
+        ``None`` only means that lifecycle history permits this proposal; it does
+        not authorize execution. Callers still validate scope, current deployment
+        evidence and emergency settings. Unregistered revisions need no release,
+        but cannot evade a quarantined digest or a later suspension of the profile.
+        """
+        if not profile_id or type(revision) is not int or not 0 < revision <= 2**53 - 1:
+            raise ValueError("A profile id and valid revision are required")
+        if len(artifact_sha256) != 64 or any(c not in "0123456789abcdef" for c in artifact_sha256):
+            raise ValueError("Artifact digest must be SHA-256 hex")
+        if calibration_min_slot is not None:
+            _slot(calibration_min_slot)
+        with self._connection() as db:
+            db.execute("BEGIN")
+            row = db.execute(
+                "SELECT state,quarantine,manifest FROM profiles WHERE id=? AND revision=?",
+                (profile_id, revision),
+            ).fetchone()
+            if row is not None:
+                if json.loads(row["manifest"])["artifact_sha256"] != artifact_sha256:
+                    return "artifact_mismatch"
+                if row["state"] == "retired":
+                    return "profile_retired"
+                if row["state"] == "suspended" or row["quarantine"] is not None:
+                    return "profile_suspended"
+            if db.execute(
+                "SELECT 1 FROM quarantine WHERE id=? AND digest=?",
+                (profile_id, artifact_sha256),
+            ).fetchone():
+                return "artifact_quarantined"
+            # Suspension can be recorded after retirement, when the profile row's
+            # suspended_slot is intentionally unchanged. Read that durable audit
+            # evidence using the profile index. Slots are decimal unsigned 64-bit
+            # strings: length then lexical ordering avoids SQLite signed overflow.
+            suspension = db.execute(
+                "SELECT slot FROM audit WHERE id=? AND action='suspend' AND slot IS NOT NULL "
+                "ORDER BY length(slot) DESC,slot DESC LIMIT 1",
+                (profile_id,),
+            ).fetchone()
+            if suspension is not None and (
+                calibration_min_slot is None or calibration_min_slot <= int(suspension["slot"])
+            ):
+                return "profile_suspended"
+        return None
 
     def active_snapshot(self, profile_id: str) -> tuple[ProfileManifest, bytes, str]:
         """One consistent read; users must still call check before accepting a decision."""

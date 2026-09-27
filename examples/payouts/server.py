@@ -13,25 +13,43 @@ from urllib.parse import parse_qs, urlsplit
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
-from examples.payouts.app import Application
+from examples.payouts.app import CU_CAP, Application
+
+DEMO_METHODS = ("always_simulate", "adaptive", "scoped_fixed_batch", "learned")
+DEFAULT_METHOD = "always_simulate"
 
 
-def serve(directory: Path, port: int = 8787) -> None:
+def request_method(body: dict) -> str:
+    method = body.get("method", DEFAULT_METHOD)
+    if not isinstance(method, str) or method not in DEMO_METHODS:
+        raise ValueError("unsupported demo strategy")
+    return method
+
+
+def create_server(
+    directory: Path,
+    port: int = 8787,
+    *,
+    compute_unit_cap: int = CU_CAP,
+    stop_event: threading.Event | None = None,
+) -> ThreadingHTTPServer:
+    if type(compute_unit_cap) is not int or not 1 <= compute_unit_cap <= 1_400_000:
+        raise ValueError("compute unit cap must be an integer between 1 and 1400000")
     token = secrets.token_hex(32)
-    stop = threading.Event()
+    stop = stop_event if stop_event is not None else threading.Event()
     lock = threading.Lock()
-    worker = {"running": False, "error": None, "queue": None}
+    worker = {"running": False, "error": None, "queue": None, "method": None}
     last = {}
     drafts = {}
 
-    def run_worker(queue):
+    def run_worker(queue, method):
         app = None
         try:
-            app = Application(directory)
+            app = Application(directory, compute_unit_cap=compute_unit_cap)
             for _ in range(18):
                 if stop.is_set():
                     break
-                result = app.step(queue)
+                result = app.step(queue, method=method)
                 with lock:
                     last.clear()
                     last.update(result)
@@ -66,7 +84,10 @@ def serve(directory: Path, port: int = 8787) -> None:
             self.wfile.write(payload)
 
         def local_host(self):
-            return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
+            return self.headers.get("Host") in {
+                f"127.0.0.1:{server.server_port}",
+                f"localhost:{server.server_port}",
+            }
 
         def do_GET(self):
             if not self.local_host():
@@ -109,7 +130,7 @@ def serve(directory: Path, port: int = 8787) -> None:
                 return
             app = None
             try:
-                app = Application(directory)
+                app = Application(directory, compute_unit_cap=compute_unit_cap)
                 # Collection fixtures stay in the journal, not in the interactive list.
                 addresses = app.setting("interactive_queues") or []
                 queues = [app.bridge.call("verify", queue=q) for q in addresses]
@@ -132,6 +153,8 @@ def serve(directory: Path, port: int = 8787) -> None:
                             "queue": body["queue"],
                             "chosen_count": body["chosen_count"],
                             "mode": body["mode"],
+                            "method": body.get("method"),
+                            "limit_source": body.get("limit_source"),
                             "phase": row["phase"],
                             "signature": row["signature"],
                             "success": outcome.get("success"),
@@ -153,6 +176,12 @@ def serve(directory: Path, port: int = 8787) -> None:
                         "last": dict(last) if last.get("chosen_count") else persisted_last,
                         "history": history,
                         "model_available": app.bundle is not None,
+                        "methods": DEMO_METHODS,
+                        "default_method": DEFAULT_METHOD,
+                        "resource_policy": {
+                            "compute_unit_cap": app.compute_unit_cap,
+                            "loaded_data_cap": app.loaded_data_cap,
+                        },
                     }
                 self.reply(value)
             except Exception as exc:
@@ -166,7 +195,10 @@ def serve(directory: Path, port: int = 8787) -> None:
                 self.reply({"error": "local control token required"}, 403)
                 return
             origin = self.headers.get("Origin")
-            if origin and origin not in {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}:
+            if origin and origin not in {
+                f"http://127.0.0.1:{server.server_port}",
+                f"http://localhost:{server.server_port}",
+            }:
                 self.reply({"error": "origin rejected"}, 403)
                 return
             app = None
@@ -176,34 +208,40 @@ def serve(directory: Path, port: int = 8787) -> None:
                 if not 0 < length <= 16384:
                     raise ValueError("bounded JSON body required")
                 body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError("JSON object required")
                 if self.path == "/api/start":
+                    method = request_method(body)
                     with lock:
                         if worker["running"]:
                             raise ValueError("worker already running")
-                        worker.update(running=True, error=None, queue=body["queue"])
+                        worker.update(running=True, error=None, queue=body["queue"], method=method)
                         stop.clear()
-                    threading.Thread(target=run_worker, args=(body["queue"],), daemon=True).start()
-                    self.reply({"started": True})
+                    threading.Thread(
+                        target=run_worker, args=(body["queue"], method), daemon=True
+                    ).start()
+                    self.reply({"started": True, "method": method})
                     return
                 if self.path == "/api/stop":
                     stop.set()
                     self.reply({"stop_requested": True, "on_chain_pause_changed": False})
                     return
                 if self.path == "/api/step":
+                    method = request_method(body)
                     with lock:
                         if worker["running"]:
                             raise ValueError("worker already running")
-                        worker.update(running=True, error=None, queue=body["queue"])
+                        worker.update(running=True, error=None, queue=body["queue"], method=method)
                         stop.clear()
                     step_active = True
-                    app = Application(directory)
-                    result = app.step(body["queue"])
+                    app = Application(directory, compute_unit_cap=compute_unit_cap)
+                    result = app.step(body["queue"], method=method)
                     with lock:
                         last.clear()
                         last.update(result)
                     self.reply(result)
                     return
-                app = Application(directory)
+                app = Application(directory, compute_unit_cap=compute_unit_cap)
                 if self.path == "/api/create":
                     payments = body["payments"]
                     if not isinstance(payments, list) or not 1 <= len(payments) <= 16:
@@ -257,7 +295,16 @@ def serve(directory: Path, port: int = 8787) -> None:
                             worker["running"] = False
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"Payout demo: http://127.0.0.1:{port} (real isolated local test runtime)", flush=True)
+    return server
+
+
+def serve(directory: Path, port: int = 8787, *, compute_unit_cap: int = CU_CAP) -> None:
+    stop = threading.Event()
+    server = create_server(directory, port, compute_unit_cap=compute_unit_cap, stop_event=stop)
+    print(
+        f"Payout demo: http://127.0.0.1:{server.server_port} (real isolated local test runtime)",
+        flush=True,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -271,5 +318,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=Path("artifacts/payouts"))
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument(
+        "--compute-unit-cap",
+        type=int,
+        default=CU_CAP,
+        help="Explicit application CU ceiling; all demo strategies use the same ceiling",
+    )
     args = parser.parse_args()
-    serve(args.directory, args.port)
+    serve(args.directory, args.port, compute_unit_cap=args.compute_unit_cap)

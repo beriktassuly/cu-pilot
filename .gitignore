@@ -23,3 +23,5 @@ node_modules/
 *.db-shm
 # Local build brief; keep public docs focused on the product.
 ML_AGENT_PROMPT.md
+MAC_BENCHMARK_PROMPT.md
+MAC_PLANNER_DEVELOPMENT_PROMPT.md
