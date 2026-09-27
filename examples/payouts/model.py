@@ -25,6 +25,7 @@ from solders.pubkey import Pubkey
 
 from cu_pilot.binding import bind_message
 from cu_pilot.data import read_jsonl
+from cu_pilot.derivation import canonical_ata as canonical_ata
 from cu_pilot.lifecycle import DeploymentEvidence, ProfileManifest, ProfileRegistry, artifact_digest
 from cu_pilot.resources import (
     PortableSlot,
@@ -61,16 +62,7 @@ def canonical_digest(value: Any) -> str:
 
 
 def recipient_ata(recipient: str, mint: str) -> str:
-    return str(
-        Pubkey.find_program_address(
-            [
-                bytes(Pubkey.from_string(recipient)),
-                bytes(Pubkey.from_string(TOKEN_PROGRAM)),
-                bytes(Pubkey.from_string(mint)),
-            ],
-            Pubkey.from_string(ATA_PROGRAM),
-        )[0]
-    )
+    return canonical_ata(recipient, mint, TOKEN_PROGRAM, ATA_PROGRAM)[0]
 
 
 class RecipientAccountState(StrictModel):

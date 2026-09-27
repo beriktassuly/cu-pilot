@@ -265,3 +265,16 @@ uv build
 Python 3.11+; development pins 3.12. CI checks 3.11–3.13. See [contributing](CONTRIBUTING.md).
 The HTTP service is intended for local use; authentication, deployment hardening, continuous
 monitoring, and model rollout are future integration work. Licensed under [MIT](LICENSE).
+
+### Experimental hybrid comparison
+
+The opt-in adaptive_derivation method combines a nonnegative five-term resource
+formula, joint cohort calibration, existing lifecycle guards and simulation
+fallback. The current adaptive method remains a separate comparator; the
+on-chain program is unchanged.
+
+[Run a fresh four-arm comparison](docs/hybrid-comparison.md) with frozen models,
+randomized trials, durable failure records and JSON/CSV/Markdown reports.
+[Research and formula decision](docs/research/hybrid-formula-20260927.md) explain
+the public derivation features, recent Solana changes and statistical limits.
+This is an experimental local policy, not a mainnet reliability or speed claim.

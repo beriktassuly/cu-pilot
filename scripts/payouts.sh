@@ -134,9 +134,10 @@ case "${1:-help}" in
     ;;
   test) node_bin; node tests/integration/payout_program.mjs ;;
   upgrade-test) node_bin; exec .venv/bin/python -m examples.payouts.deployment_check ;;
-  info|collect|create|qualify|run|step) command=$1; shift; exec .venv/bin/python -m examples.payouts.app "$command" "$@" ;;
+  info|collect|create|qualify|qualify-hybrid|run|step) command=$1; shift; exec .venv/bin/python -m examples.payouts.app "$command" "$@" ;;
   train) shift; exec .venv/bin/python -m examples.payouts.model train "$STATE/observations.jsonl" --output "$STATE/candidate.json" --report "$STATE/estimates.json" --baselines "$STATE/baselines.json" "$@" ;;
+  compare) shift; exec .venv/bin/python -m examples.payouts.compare "$@" ;;
   benchmark) shift; exec .venv/bin/python -m examples.payouts.benchmark "$@" ;;
   demo) shift; exec .venv/bin/python -m examples.payouts.server "$@" ;;
-  *) echo 'Usage: bash scripts/payouts.sh bootstrap|build|start|serve|stop|reset|test|upgrade-test|info|collect|train|qualify|create|run|step|benchmark|demo [arguments]' ;;
+  *) echo 'Usage: bash scripts/payouts.sh bootstrap|build|start|serve|stop|reset|test|upgrade-test|info|collect|train|qualify|qualify-hybrid|create|run|step|benchmark|compare|demo [arguments]' ;;
 esac

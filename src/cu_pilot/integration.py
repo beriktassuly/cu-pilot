@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, StrictBool, StrictInt
 
+from cu_pilot.artifacts import Estimator
 from cu_pilot.binding import (
     LookupEvidence,
     bind_message,
@@ -18,7 +19,7 @@ from cu_pilot.binding import (
     slot_value,
     unsigned_wire,
 )
-from cu_pilot.resources import ResourceEstimator
+from cu_pilot.formula import FormulaEstimator, FormulaInputs
 from cu_pilot.rpc import RpcClient, RpcError, SimulationEstimate
 from cu_pilot.schemas import (
     MAX_COMPUTE_UNITS,
@@ -58,6 +59,7 @@ class DecisionPlan(StrictModel):
     durable_nonce: bool
     prediction: Prediction
     eligibility_reason: str
+    formula_inputs: FormulaInputs | None = None
     artifact_version: str | None = None
     artifact_digest: str | None = None
     profile_id: str | None = None
@@ -139,7 +141,7 @@ def record_control_outcome(decision: ResourceDecision, registry: ProfileRegistry
     )
 
 
-def artifact_digest(estimator: ResourceEstimator) -> str:
+def artifact_digest(estimator: Estimator) -> str:
     from cu_pilot.lifecycle import artifact_digest as canonical_digest
 
     return canonical_digest(estimator.model.model_dump_json())
@@ -149,7 +151,7 @@ def prepare_decision(
     wire_base64: str,
     *,
     context: EstimationContext,
-    estimator: ResourceEstimator | None = None,
+    estimator: Estimator | None = None,
     observation_id: str | None = None,
     lookups: Mapping[str, LookupEvidence] | None = None,
     rpc: RpcClient | None = None,
@@ -199,6 +201,8 @@ def prepare_decision(
     )
     digest = None
     if estimator is not None:
+        if isinstance(estimator, FormulaEstimator) and estimator.inputs is not None:
+            estimator.validate_binding(bound.prepared_identity, transaction=bound.transaction)
         prediction = estimator.predict(
             bound.features, context=context.context, current_slot=context.current_slot
         )
@@ -277,6 +281,7 @@ def prepare_decision(
         durable_nonce=bound.durable_nonce,
         prediction=prediction,
         eligibility_reason=reason,
+        formula_inputs=estimator.inputs if isinstance(estimator, FormulaEstimator) else None,
         artifact_version=(str(estimator.model.artifact_version) if estimator is not None else None),
         artifact_digest=digest,
         profile_id=profile_id,
@@ -368,6 +373,15 @@ def execute_decision(
             if accepted:
                 try:
                     manifest, active_model = registry.load_active(plan.profile_id or "")
+                    if isinstance(active_model, FormulaEstimator):
+                        if plan.formula_inputs is None:
+                            raise ValueError("formula plan requires frozen pre-execution evidence")
+                        active_model = active_model.bind(plan.formula_inputs)
+                        active_model.validate_binding(
+                            rebound.prepared_identity, transaction=rebound.transaction
+                        )
+                    elif plan.formula_inputs is not None:
+                        raise ValueError("quantile artifact cannot authorize formula evidence")
                     active_prediction = active_model.predict(
                         rebound.features, context=plan.context.context, current_slot=execution_slot
                     )
@@ -378,7 +392,15 @@ def execute_decision(
                         and not active_prediction.simulation_recommended
                     )
                     if not accepted:
-                        fallback_reason = "prediction_artifact_mismatch"
+                        # Preserve the trusted model's current safety reason. A
+                        # stale input is not evidence of corrupted artifact bytes.
+                        fallback_reason = (
+                            active_prediction.reason
+                            if manifest.revision == plan.profile_revision
+                            and manifest.artifact_sha256 == plan.artifact_digest
+                            and active_prediction.simulation_recommended
+                            else "prediction_artifact_mismatch"
+                        )
                     if accepted:
                         assert prediction.compute_unit_limit is not None
                         assert prediction.loaded_accounts_data_size_limit is not None
@@ -478,7 +500,7 @@ def estimate_resources(
     *,
     rpc: RpcClient,
     context: EstimationContext,
-    estimator: ResourceEstimator | None = None,
+    estimator: Estimator | None = None,
     registry: ProfileRegistry | None = None,
     profile_id: str | None = None,
     observation_id: str | None = None,

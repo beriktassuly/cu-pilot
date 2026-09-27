@@ -531,8 +531,8 @@ def test_watcher_redacts_errors_and_fails_closed(registry: ProfileRegistry) -> N
     assert registry.check("batch", **ENV).reason == "deployment_watcher_failed"
 
 
-def test_watcher_rejects_incoherent_loader_v3_batches(registry: ProfileRegistry) -> None:
-    program = account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + b"\0" * 32)
+def test_watcher_rejects_missing_program_in_final_snapshot(registry: ProfileRegistry) -> None:
+    program = account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + bytes([17]) * 32)
     reader = Reader(
         [
             dict(context=dict(slot=400), value=[program]),
@@ -805,3 +805,125 @@ def test_deployment_before_calibration_and_atomic_decision_snapshot(
     assert rejected.evidence_snapshot["state"] == "suspended"
     assert rejected.evidence_snapshot["quarantine"] == "deployment_changed"
     assert snapshot["state"] == "active"  # Previously returned evidence is not overwritten.
+
+
+def test_watcher_accepts_advancing_discovery_with_atomic_final_accounts(tmp_path):
+    from solders.pubkey import Pubkey
+
+    pointer = Pubkey.from_bytes(bytes([19]) * 32)
+    program = account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + bytes(pointer))
+    old_native, final_native = account(data=b"old"), account(data=b"new")
+    data = account(
+        UPGRADEABLE_LOADER,
+        (3).to_bytes(4, "little")
+        + (350).to_bytes(8, "little")
+        + bytes([0])
+        + bytes(32)
+        + b"new-elf",
+        False,
+    )
+    requests = []
+
+    class AtomicReader(Reader):
+        def get_multiple_accounts(self, addresses, *, min_context_slot, commitment):
+            requests.append((list(addresses), min_context_slot))
+            return super().get_multiple_accounts(
+                addresses, min_context_slot=min_context_slot, commitment=commitment
+            )
+
+    reader = AtomicReader(
+        [
+            {"context": {"slot": 400}, "value": [program, old_native]},
+            {"context": {"slot": 401}, "value": [program, final_native, data]},
+        ]
+    )
+    registry = ProfileRegistry(tmp_path / "watcher.sqlite")
+    result = refresh_deployments(
+        registry,
+        reader,
+        [PROGRAM, DEPENDENCY],
+        current_slot=400,
+        cluster_identity="local",
+        runtime_identity="runtime",
+        checked_at=1000,
+    )
+    assert requests == [([PROGRAM, DEPENDENCY], 400), ([PROGRAM, DEPENDENCY, str(pointer)], 400)]
+    assert all(item.observed_slot == 401 for item in result)
+    assert result[0].deployment_slot == 350
+    expected = deployment_identity(
+        DEPENDENCY,
+        final_native,
+        observed_slot=401,
+        checked_at=1000,
+        cluster_identity="local",
+        runtime_identity="runtime",
+    )
+    assert result[1].fingerprint == expected.fingerprint  # No first-read account enters evidence.
+
+
+@pytest.mark.parametrize(
+    "mutation", ["pointer", "loader", "new_upgradeable", "data_owner", "future_deployment"]
+)
+def test_watcher_atomic_refresh_rejects_changed_pointer_or_invalid_final_state(tmp_path, mutation):
+    from solders.pubkey import Pubkey
+
+    pointer = Pubkey.from_bytes(bytes([19]) * 32)
+    alternate = Pubkey.from_bytes(bytes([20]) * 32)
+    original = account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + bytes(pointer))
+    changed = account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + bytes(alternate))
+    native = account()
+    final_program = (
+        changed if mutation == "pointer" else native if mutation == "loader" else original
+    )
+    final_native = changed if mutation == "new_upgradeable" else native
+    data = account(
+        NATIVE_LOADER if mutation == "data_owner" else UPGRADEABLE_LOADER,
+        (3).to_bytes(4, "little")
+        + (401 if mutation == "future_deployment" else 350).to_bytes(8, "little")
+        + bytes([0])
+        + bytes(32)
+        + b"elf",
+        False,
+    )
+    reader = Reader(
+        [
+            {"context": {"slot": 400}, "value": [original, native]},
+            {"context": {"slot": 401}, "value": [final_program, final_native, data]},
+        ]
+    )
+    registry = ProfileRegistry(tmp_path / "watcher.sqlite")
+    with pytest.raises(ValueError, match="cached evidence invalidated"):
+        refresh_deployments(
+            registry,
+            reader,
+            [PROGRAM, DEPENDENCY],
+            current_slot=400,
+            cluster_identity="local",
+            runtime_identity="runtime",
+        )
+    assert reader.calls == 2
+    assert registry.audit_events()[-1]["action"] == "watcher_failure"
+
+
+def test_watcher_bounds_combined_snapshot_before_second_rpc(tmp_path):
+    from solders.pubkey import Pubkey
+
+    programs = [str(Pubkey.from_bytes(bytes([index]) * 32)) for index in range(1, 52)]
+    values = [
+        account(UPGRADEABLE_LOADER, (2).to_bytes(4, "little") + bytes([index + 100]) * 32)
+        for index in range(1, 52)
+    ]
+    reader = Reader([{"context": {"slot": 400}, "value": values}])
+    registry = ProfileRegistry(tmp_path / "watcher.sqlite")
+    with pytest.raises(ValueError, match="deployment_batch_too_large"):
+        refresh_deployments(
+            registry,
+            reader,
+            programs,
+            current_slot=400,
+            max_programs=100,
+            cluster_identity="local",
+            runtime_identity="runtime",
+        )
+    assert reader.calls == 1
+    assert registry.audit_events()[-1]["action"] == "watcher_failure"

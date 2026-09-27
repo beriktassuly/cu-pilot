@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, StrictInt, model_validator
-from solders.pubkey import Pubkey
 
 from cu_pilot.data import read_jsonl
 from cu_pilot.estimator import empirical_quantile, wilson_upper_bound
@@ -31,6 +30,7 @@ from examples.payouts.model import (
     PayoutModelBundle,
     PayoutObservation,
     PayoutStateEnvelope,
+    canonical_ata,
     canonical_digest,
     fit_bundle,
     unique_rows,
@@ -91,15 +91,8 @@ def derive_features(state: PayoutStateEnvelope) -> DerivationFeatures:
     bumps = []
     missing_attempts = 0
     for account in state.recipient_accounts:
-        address, bump = Pubkey.find_program_address(
-            [
-                bytes(Pubkey.from_string(account.recipient)),
-                bytes(Pubkey.from_string(TOKEN_PROGRAM)),
-                bytes(Pubkey.from_string(state.mint)),
-            ],
-            Pubkey.from_string(ATA_PROGRAM),
-        )
-        if str(address) != account.address:
+        address, bump = canonical_ata(account.recipient, state.mint, TOKEN_PROGRAM, ATA_PROGRAM)
+        if address != account.address:
             raise ValueError("derived ATA differs from pre-execution account evidence")
         bumps.append(bump)
         if not account.exists:

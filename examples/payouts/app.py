@@ -46,6 +46,7 @@ MENU = (1, 2, 4, 8)
 METHODS = (
     "learned",
     "adaptive",
+    "adaptive_derivation",
     "always_simulate",
     "fixed_batch",
     "scoped_fixed_batch",
@@ -182,6 +183,12 @@ class Application:
         self.watcher_at = 0.0
         self.watcher_slot = 0
         self.bundle = None
+        self.hybrid_bundle = None
+        hybrid_path = directory / "hybrid-candidate.json"
+        if hybrid_path.exists():
+            from examples.payouts.hybrid import PayoutHybridBundle
+
+            self.hybrid_bundle = PayoutHybridBundle.load(hybrid_path)
         baseline_path = directory / "baselines.json"
         self.baselines = json.loads(baseline_path.read_text()) if baseline_path.exists() else None
         bundle_path = directory / "candidate.json"
@@ -359,20 +366,36 @@ class Application:
             )
         return result
 
-    def collect(self, groups: int = 80) -> dict[str, Any]:
+    def collect(self, groups: int = 80, *, namespace: str | None = None) -> dict[str, Any]:
         """Resume without turning retried requests into independent labels."""
         from examples.payouts.model import PayoutObservation
 
-        if groups < 1 or groups > 80:
-            raise ValueError("collection is bounded to 80 groups")
+        if type(groups) is not int or not 1 <= groups <= 512:
+            raise ValueError("collection is bounded to one through 512 groups")
         schedule = self.setting("collection_schedule") or {}
+        saved_namespace = self.setting("collection_namespace")
+        if saved_namespace is None and schedule:
+            # Preserve an interrupted legacy collection's recipient identities.
+            saved_namespace = "legacy:payout-collection-v1:1729"
+        if namespace is not None and (not namespace.strip() or len(namespace) > 256):
+            raise ValueError("collection namespace must contain one through 256 characters")
+        if saved_namespace is not None and namespace not in (None, saved_namespace):
+            raise ValueError("collection namespace changed; use a fresh collection directory")
+        namespace = (
+            saved_namespace or namespace or self.info["instance_id"] + ":" + uuid.uuid4().hex
+        )
+        self.set_setting("collection_namespace", namespace)
         completed = 0
         start = time.perf_counter()
         for group in range(groups):
             for count in range(1, 9):
                 key = f"{group}:{count}"
                 if key not in schedule:
-                    queue_id = sha([self.info["instance_id"], "collection", group, count])
+                    queue_id = sha(
+                        [self.info["instance_id"], "collection", group, count]
+                        if namespace == "legacy:payout-collection-v1:1729"
+                        else [self.info["instance_id"], "collection-v2", namespace, group, count]
+                    )
                     length = (
                         count + 1
                         if group % 3 == 2
@@ -384,7 +407,11 @@ class Application:
                         length=length,
                         existing=1 if group % 3 == 2 else 0,
                         identifier=queue_id,
-                        recipient_seed=f"payout-collection-v1:1729:{group}:{count}",
+                        recipient_seed=(
+                            f"payout-collection-v1:1729:{group}:{count}"
+                            if namespace == "legacy:payout-collection-v1:1729"
+                            else f"payout-collection-v2:{namespace}:{group}:{count}"
+                        ),
                     )
                     schedule[key] = q["queue"]["address"]
                     self.set_setting("collection_schedule", schedule)
@@ -494,8 +521,9 @@ class Application:
         (self.directory / "collection-provenance.json").write_text(
             json.dumps(
                 {
-                    "schedule_version": "payout-collection-v1",
-                    "recipient_seed": 1729,
+                    "schedule_version": "payout-collection-v2",
+                    "recipient_namespace": namespace,
+                    "recipient_seed_rule": "namespace, chronological group and candidate count",
                     "groups": groups,
                     "counts": list(range(1, 9)),
                     "ata_states": "every missing count from count down to zero",
@@ -521,7 +549,7 @@ class Application:
                     "queue_schedule": "group%3: nonterminal prefixes, terminal tails, "
                     "then cursor-one tails after actual warmup execution",
                     "note": "Mint, owner/executor and queue identities are ephemeral. "
-                    "Public recipients use the recorded fixture seed; PDA costs/timings vary.",
+                    "Public recipients use the durable recorded namespace; PDA costs/timings vary.",
                 },
                 indent=2,
             )
@@ -550,6 +578,32 @@ class Application:
             },
         )
         (self.directory / "qualification.json").write_text(json.dumps(result, indent=2) + "\n")
+        return result
+
+    def qualify_hybrid(self):
+        """Explicit local formula release; fitting and file presence grant no authority."""
+        from examples.payouts.hybrid import qualify_hybrid_bundle
+
+        if self.hybrid_bundle is None:
+            raise ValueError("train a hybrid candidate first")
+        slot = self.rpc.get_slot()
+        self.refresh(slot, force=True)
+        result = qualify_hybrid_bundle(
+            self.hybrid_bundle,
+            self.registry,
+            current_slot=max(slot, self.watcher_slot),
+            deployments=self.evidence,
+            dependencies={
+                self.info["program"]: (TOKEN, ATA, SYSTEM),
+                ATA: (TOKEN, SYSTEM),
+                TOKEN: (),
+                SYSTEM: (),
+                BUDGET: (),
+            },
+        )
+        (self.directory / "hybrid-qualification.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
         return result
 
     def _store_step(self, identifier: str, queue: str, body: dict[str, Any]) -> None:
@@ -670,7 +724,16 @@ class Application:
             full_preparation_ms=plan.preparation_ms,
         )
 
-    def _adaptive_selection(self, queue, identifier, options, plans, candidates):
+    def _adaptive_selection(
+        self,
+        queue,
+        identifier,
+        options,
+        plans,
+        candidates,
+        *,
+        prediction_source="qualified_learned_prediction",
+    ):
         """Largest verified prefix, with one bounded decision per exact candidate.
 
         A successful over-cap measurement permits shrinking. An unknown or failed
@@ -748,7 +811,7 @@ class Application:
                     and option["limits"][1] <= self.loaded_data_cap
                 )
                 probe["requested_source"] = (
-                    "qualified_learned_prediction" if use_prediction else "fresh_simulation"
+                    prediction_source if use_prediction else "fresh_simulation"
                 )
                 persist("planning")
                 trial = execute_decision(
@@ -811,7 +874,7 @@ class Application:
                     continue
                 audit["selected_count"] = option["count"]
                 audit["limit_source"] = (
-                    "qualified_learned_prediction"
+                    prediction_source
                     if trial.status == "accepted_prediction"
                     else "fresh_simulation"
                 )
@@ -895,7 +958,8 @@ class Application:
                     raise RuntimeError("count constraint excludes the scoped fixed batch")
         self.refresh(q["slot"])
         identifier = uuid.uuid4().hex
-        model_digest = self.bundle.digest if self.bundle is not None else "0" * 64
+        model_bundle = self.hybrid_bundle if method == "adaptive_derivation" else self.bundle
+        model_digest = model_bundle.digest if model_bundle is not None else "0" * 64
         options = []
         plans = {}
         candidates = {}
@@ -924,14 +988,20 @@ class Application:
             state = self.envelope(candidate)
             request_id = "execute:" + identifier + ":" + str(count)
             profile, estimator, state_reason = None, None, "no_payout_artifact"
-            if self.bundle is not None and candidate["supported"]:
-                profile, estimator, state_reason = self.bundle.estimator_for(
+            if model_bundle is not None and candidate["supported"]:
+                feature_arguments = {}
+                if method == "adaptive_derivation":
+                    feature_arguments["features"] = bind_message(
+                        candidate["wire"], current_slot=candidate["slot"]
+                    ).features
+                profile, estimator, state_reason = model_bundle.estimator_for(
                     state,
                     current_slot=candidate["slot"],
                     deployment_bindings=self.deployment_bindings,
                     prepared_identity=state.prepared_identity,
+                    **feature_arguments,
                 )
-            if method not in {"learned", "adaptive"}:
+            if method not in {"learned", "adaptive", "adaptive_derivation"}:
                 profile, estimator = None, None
             plan = prepare_decision(
                 candidate["wire"],
@@ -948,7 +1018,7 @@ class Application:
                 not plan.prediction.simulation_recommended
                 and plan.eligibility_reason == plan.prediction.reason
             )
-            if method in {"learned", "adaptive"} and eligible:
+            if method in {"learned", "adaptive", "adaptive_derivation"} and eligible:
                 limits = (
                     plan.prediction.compute_unit_limit,
                     plan.prediction.loaded_accounts_data_size_limit,
@@ -1031,9 +1101,18 @@ class Application:
         decision = None
         simulations = controls = 0
         planning_audit = None
-        if method == "adaptive":
+        if method in {"adaptive", "adaptive_derivation"}:
             decision, selected, planning_audit = self._adaptive_selection(
-                queue, identifier, options, plans, candidates
+                queue,
+                identifier,
+                options,
+                plans,
+                candidates,
+                prediction_source=(
+                    "qualified_derivation_prediction"
+                    if method == "adaptive_derivation"
+                    else "qualified_learned_prediction"
+                ),
             )
             simulations = planning_audit["estimation_simulations"]
             controls = planning_audit["control_simulations"]
@@ -1121,6 +1200,8 @@ class Application:
         body["limit_source"] = (
             "fresh_simulation"
             if decision.status == "simulation_success"
+            else "qualified_derivation_prediction"
+            if method == "adaptive_derivation"
             else "qualified_learned_prediction"
             if method in {"learned", "adaptive"}
             else "scoped_fitted_estimate"
@@ -1323,9 +1404,12 @@ class Application:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["info", "collect", "create", "qualify", "run", "step"])
+    parser.add_argument(
+        "command", choices=["info", "collect", "create", "qualify", "qualify-hybrid", "run", "step"]
+    )
     parser.add_argument("--directory", type=Path, default=Path("artifacts/payouts"))
     parser.add_argument("--groups", type=int, default=80)
+    parser.add_argument("--collection-namespace", help="Durable public recipient namespace")
     parser.add_argument("--length", type=int, default=16)
     parser.add_argument("--existing", type=int, default=0)
     parser.add_argument("--queue")
@@ -1347,9 +1431,11 @@ def main() -> None:
         if args.command == "info":
             result = app.info
         elif args.command == "collect":
-            result = app.collect(args.groups)
+            result = app.collect(args.groups, namespace=args.collection_namespace)
         elif args.command == "qualify":
             result = app.qualify()
+        elif args.command == "qualify-hybrid":
+            result = app.qualify_hybrid()
         elif args.command in {"run", "step"}:
             queue = (
                 args.queue

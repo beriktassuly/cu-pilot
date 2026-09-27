@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 import httpx
 import typer
 
+from cu_pilot.artifacts import Estimator, artifact_estimator, parse_artifact
 from cu_pilot.binding import bind_message
 from cu_pilot.data import load_observations, read_jsonl, write_observations
 from cu_pilot.integration import EstimationContext, estimate_resources
@@ -68,7 +69,9 @@ def estimate(
 ) -> None:
     """Bound unsigned preparation: local accepted limits, actual simulation, or unresolved."""
     ctx = EstimationContext.model_validate_json(context.read_text(encoding="utf-8"))
-    estimator = ResourceEstimator.load(model) if model else None
+    estimator: Estimator | None = (
+        artifact_estimator(parse_artifact(model.read_bytes())) if model else None
+    )
     profiles = ProfileRegistry(registry) if registry else None
     if profiles is not None and profile is not None and estimator is None:
         _, estimator = profiles.load_active(profile)
@@ -102,7 +105,9 @@ def shadow(
     """Persist prediction first and simulate every input; --replay uses recorded responses."""
     if profile is not None and registry is None:
         raise typer.BadParameter("--profile requires --registry")
-    estimator = ResourceEstimator.load(model) if model else None
+    estimator: Estimator | None = (
+        artifact_estimator(parse_artifact(model.read_bytes())) if model else None
+    )
     profiles = ProfileRegistry(registry) if registry is not None else None
     if profiles is not None and profile is not None and estimator is None:
         try:

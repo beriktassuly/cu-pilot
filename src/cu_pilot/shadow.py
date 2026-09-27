@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import Field, ValidationError
 
+from cu_pilot.artifacts import Estimator
 from cu_pilot.binding import (
     LookupEvidence,
     bind_message,
@@ -36,7 +37,6 @@ from cu_pilot.integration import (
     record_control_outcome,
 )
 from cu_pilot.resource_evaluation import PreparationTrace
-from cu_pilot.resources import ResourceEstimator
 from cu_pilot.rpc import RpcClient, RpcError
 from cu_pilot.schemas import Observation, ResourceLabel, StrictModel
 
@@ -510,7 +510,7 @@ def collect_shadow(
     *,
     store: ObservationStore,
     rpc: RpcClient,
-    estimator: ResourceEstimator | None = None,
+    estimator: Estimator | None = None,
     registry: ProfileRegistry | None = None,
     profile_id: str | None = None,
     stream: str = "default",

@@ -24,7 +24,7 @@ from cu_pilot.parsing import validate_pubkey
 from cu_pilot.schemas import MAX_COMPUTE_UNITS, MAX_LOADED_ACCOUNT_BYTES, StrictModel
 
 if TYPE_CHECKING:
-    from cu_pilot.resources import ResourceEstimator
+    from cu_pilot.artifacts import Estimator
 
 UPGRADEABLE_LOADER = "BPFLoaderUpgradeab1e11111111111111111111111"
 IMMUTABLE_LOADERS = frozenset(
@@ -53,9 +53,9 @@ def _json(value: Any) -> str:
 
 def artifact_digest(payload: str | bytes) -> str:
     """Hash validated portable canonical JSON, ignoring file formatting."""
-    from cu_pilot.resources import ResourceArtifact
+    from cu_pilot.artifacts import parse_artifact
 
-    model = ResourceArtifact.model_validate_json(payload)
+    model = parse_artifact(payload)
     return hashlib.sha256(_json(model.model_dump(mode="json")).encode()).hexdigest()
 
 
@@ -299,12 +299,12 @@ class ProfileRegistry:
         )
 
     def register(self, manifest: ProfileManifest, artifact: str | bytes, *, actor: str) -> None:
-        from cu_pilot.resources import ResourceArtifact
+        from cu_pilot.artifacts import parse_artifact
 
         payload = artifact.encode() if isinstance(artifact, str) else artifact
         if len(payload) > 16 * 1024 * 1024:
             raise ValueError("Artifact exceeds registry size bound")
-        model = ResourceArtifact.model_validate_json(payload)
+        model = parse_artifact(payload)
         payload = _json(model.model_dump(mode="json")).encode()
         if artifact_digest(payload) != manifest.artifact_sha256:
             raise ValueError("Artifact digest mismatch")
@@ -312,6 +312,15 @@ class ProfileRegistry:
             raise ValueError("Artifact context/provenance differs from manifest")
         if model.max_slot != manifest.evidence_max_slot:
             raise ValueError("Manifest cannot manufacture fresh artifact observations")
+        from cu_pilot.formula import FormulaArtifact
+
+        if isinstance(model, FormulaArtifact) and (
+            model.cluster_identity != manifest.cluster_identity
+            or model.runtime_identity != manifest.runtime_identity
+            or model.deployment_bindings != manifest.deployment_bindings
+            or model.evidence_min_slot != manifest.evidence_min_slot
+        ):
+            raise ValueError("Formula evidence scope differs from release manifest")
         with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute(
@@ -507,17 +516,10 @@ class ProfileRegistry:
                 )
             if manifest.provenance == "synthetic":
                 raise ValueError("Synthetic evidence cannot release an active profile")
-            from cu_pilot.resources import ResourceArtifact, limit_risk
+            from cu_pilot.artifacts import parse_artifact, qualified_for_activation
 
-            model = ResourceArtifact.model_validate_json(row["artifact"])
-            if not any(
-                stats.train_count >= model.policy.min_samples
-                and stats.calibration_count >= model.policy.min_calibration_samples
-                and stats.calibration_upper_bound is not None
-                and stats.calibration_upper_bound <= model.policy.max_joint_underestimation_rate
-                and limit_risk(stats, model.policy) is None
-                for stats in model.patterns.values()
-            ):
+            model = parse_artifact(row["artifact"])
+            if not qualified_for_activation(model):
                 raise ValueError("Artifact has no qualified dual-resource pattern")
             rejected = self._environment_reason(
                 db,
@@ -765,14 +767,14 @@ class ProfileRegistry:
             state = "suspended" if quarantined and row[2] != "retired" else str(row[2])
             return manifest, bytes(row[1]), state
 
-    def load_active(self, profile_id: str) -> tuple[ProfileManifest, ResourceEstimator]:
+    def load_active(self, profile_id: str) -> tuple[ProfileManifest, Estimator]:
         """Load a validated release snapshot; eligibility still requires check()."""
-        from cu_pilot.resources import ResourceArtifact, ResourceEstimator
+        from cu_pilot.artifacts import artifact_estimator, parse_artifact
 
         manifest, payload, state = self.active_snapshot(profile_id)
         if state != "active" or artifact_digest(payload) != manifest.artifact_sha256:
             raise ValueError("Current profile is inactive or artifact integrity failed")
-        return manifest, ResourceEstimator(ResourceArtifact.model_validate_json(payload))
+        return manifest, artifact_estimator(parse_artifact(payload))
 
     def export_snapshot(self, profile_id: str, *, now: float | None = None) -> dict[str, Any]:
         """Portable, expiring read snapshot for a local TypeScript process.
@@ -1129,6 +1131,14 @@ class ProfileRegistry:
             ]
 
 
+class DeploymentRefreshError(ValueError):
+    """Sanitized watcher stage; never copies provider URLs or exception text."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__("Deployment refresh failed; cached evidence invalidated (" + code + ")")
+
+
 def refresh_deployments(
     registry: ProfileRegistry,
     client: AccountReader,
@@ -1143,8 +1153,10 @@ def refresh_deployments(
 ) -> list[DeploymentEvidence]:
     """Two bounded account batches at most; caller schedules/rate-limits refreshes.
 
-    A v3 batch that crosses slots is rejected rather than claiming one coherent
-    snapshot. A later refresh can retry. No caller exception text is persisted.
+    The discovery read finds loader-v3 pointers. When present, the second read
+    fetches both Programs and ProgramData atomically and supplies all evidence.
+    Pointer changes reject the refresh. Advancing between reads is harmless;
+    combining account values from different snapshots is never permitted.
     """
     _slot(current_slot)
     programs = list(dict.fromkeys(program_ids))
@@ -1154,10 +1166,12 @@ def refresh_deployments(
         validate_pubkey(program)
     if commitment not in ("confirmed", "finalized"):
         raise ValueError("Unsupported deployment commitment")
+    failure_code = "program_batch_read_failed"
     try:
         result = client.get_multiple_accounts(
             programs, min_context_slot=current_slot, commitment=commitment
         )
+        failure_code = "invalid_program_batch"
         observed_slot = _slot(result["context"]["slot"])
         values = result["value"]
         if (
@@ -1166,23 +1180,47 @@ def refresh_deployments(
             or len(values) != len(programs)
         ):
             raise ValueError("Invalid deployment account batch")
-        pointers: list[str] = []
-        for account in values:
+        failure_code = "invalid_program_state"
+        discovered: dict[str, str] = {}
+        for program, account in zip(programs, values, strict=True):
             owner, _, data = _account(account)
             if owner == UPGRADEABLE_LOADER:
                 if len(data) != 36 or int.from_bytes(data[:4], "little") != 2:
                     raise ValueError("Invalid loader-v3 Program state")
-                pointers.append(_base58(data[4:36]))
+                discovered[program] = _base58(data[4:36])
         programdata: dict[str, Any] = {}
-        if pointers:
+        if discovered:
+            addresses = list(dict.fromkeys([*programs, *discovered.values()]))
+            failure_code = "deployment_batch_too_large"
+            if len(addresses) > 100:
+                raise ValueError("Combined deployment snapshot exceeds RPC account bound")
+            failure_code = "coherent_batch_read_failed"
             second = client.get_multiple_accounts(
-                pointers, min_context_slot=observed_slot, commitment=commitment
+                addresses, min_context_slot=observed_slot, commitment=commitment
             )
-            if _slot(second["context"]["slot"]) != observed_slot or len(second["value"]) != len(
-                pointers
+            failure_code = "invalid_coherent_batch"
+            final_slot = _slot(second["context"]["slot"])
+            if (
+                final_slot < observed_slot
+                or not isinstance(second["value"], list)
+                or (len(second["value"]) != len(addresses))
             ):
-                raise ValueError("Deployment batches span different slots")
-            programdata = dict(zip(pointers, second["value"], strict=True))
+                raise ValueError("Invalid coherent deployment snapshot")
+            snapshot = dict(zip(addresses, second["value"], strict=True))
+            values = [snapshot[program] for program in programs]
+            failure_code = "program_pointer_changed"
+            for program, account in zip(programs, values, strict=True):
+                owner, _, data = _account(account)
+                if owner == UPGRADEABLE_LOADER:
+                    if len(data) != 36 or int.from_bytes(data[:4], "little") != 2:
+                        raise ValueError("Invalid refreshed loader-v3 Program state")
+                    if discovered.get(program) != _base58(data[4:36]):
+                        raise ValueError("Loader-v3 ProgramData pointer changed during discovery")
+                elif program in discovered:
+                    raise ValueError("Program loader changed during discovery")
+            programdata = {pointer: snapshot[pointer] for pointer in discovered.values()}
+            observed_slot = final_slot
+        failure_code = "invalid_deployment_identity"
         now = _timestamp(checked_at)
         observations = []
         for program, account in zip(programs, values, strict=True):
@@ -1200,11 +1238,12 @@ def refresh_deployments(
                     runtime_identity=runtime_identity,
                 )
             )
+        failure_code = "deployment_evidence_regressed"
         registry.record_deployments(observations)
         return observations
     except Exception:
         registry.watcher_failed()
-        raise ValueError("Deployment refresh failed; cached evidence invalidated") from None
+        raise DeploymentRefreshError(failure_code) from None
 
 
 def runtime_identity_from_version(version: dict[str, Any]) -> str:
